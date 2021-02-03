@@ -1,27 +1,28 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/1/2021 12:00AM
+   Last Edit: 2/2/2021 9:30PM
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: dispatcher() & join() implementation and testing.
+   TO-DO: implement quit, lookup proper error messages, write empty zap,
+   test code. after that add time_slice and use sys.time, add deadlock however
+   that works.
 
-   LAST DONE: (1) finished adding necessary code to p1.c (ref. slides),
-   (2) added algorithm to find empty slot in table. this generates int value
-   proc_slot which is used below the algorithm and in p1_fork() (see fork1())
-   (3) linked elements in ProcTable using next_sibling_ptr attr (see startup())
-
-   Note: need to investigate usage of next_sibling_ptr later on to determine
-   if i used it incorrectly in startup() as a means to link elements.
-   make use of make clean and make test00 next time i get the chance.
+   LAST DONE: (1) rough implementation of dispatcher and join. (2) implemented
+   getpid() and utilized the returned value inside fork1. (3) decided to call
+   dispatcher at end of fork1. may have to change that. i randomly inserted it.
    ------------------------------------------------------------------------ */
 #include <stdlib.h>
 #include <strings.h>
 #include <stdio.h>
 #include <phase1.h>
 #include "kernel.h"
+
+/* for getpid() */
+#include <sys/types.h>
+#include <unistd.h>
 
 /* ------------------------- Prototypes ----------------------------------- */
 int sentinel (void *);
@@ -48,6 +49,9 @@ proc_ptr Current;
 /* the next pid to be assigned */
 unsigned int next_pid = SENTINELPID;
 
+#define READY 0
+#define BLOCKED 1
+#define QUIT 2
 
 /* -------------------------- Functions ----------------------------------- */
 /* ------------------------------------------------------------------------
@@ -66,6 +70,7 @@ void startup()
    /* initialize the process table */
    //NOTE: adjust other attributes if necessary. just linking siblings
    for (i = 0; i < MAXPROC; i++) {
+     ProcTable[i].priority = 0; //need to initialize value otherwise undefined behavior
      if ((i+1) != MAXPROC) {
        ProcTable[i].next_sibling_ptr = &ProcTable[i+1];
      }
@@ -74,7 +79,7 @@ void startup()
    if (DEBUG && debugflag)
       console("startup(): initializing the Ready & Blocked lists\n");
 
-   proc_struct ReadyList[MAXPROC];
+   proc_ptr ReadyList;
 
    /* Initialize the clock interrupt handler */
    //NOTE: defer working on this until fork1, join, quit, and dispatcher are working
@@ -117,6 +122,12 @@ void finish()
    if (DEBUG && debugflag)
       console("in finish...\n");
 } /* finish */
+
+int getpid(void) {
+  int pid = (int) getpid();
+  return pid;
+}
+/* getpid */
 
 /* ------------------------------------------------------------------------
    Name - fork1
@@ -180,6 +191,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    else
       strcpy(ProcTable[proc_slot].start_arg, arg);
 
+    ProcTable[proc_slot].pid = getpid(); //NOTE: added this
+
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC)
     */
@@ -189,6 +202,12 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
    /* for future phase(s) */
    p1_fork(ProcTable[proc_slot].pid);
+
+   //NOTE: not sure where else to call dispatcher for now
+   Current = &ProcTable[proc_slot];
+   dispatcher();
+
+   return ProcTable[proc_slot].pid;
 
 } /* fork1 */
 
@@ -233,8 +252,30 @@ void launch()
    Side Effects - If no child process has quit before join is called, the
                   parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
-int join(int *code)
-{
+int join(int *code) {
+  //TO-DO: implement zap() and method to wait until child quits..
+  currChild = Current->child_proc_ptr;
+  //if there's no children then return -2
+  if (currChild == NULL) {
+    *code = -2;
+  }
+  //check to see if children quit
+  else {
+    while (currChild != NULL && currChild->status != QUIT) {
+      currChild = currChild->next_sibling_ptr;
+    }
+    //If no child process has quit before join is called, the
+    //parent is removed from the ready list and blocked.
+    if (currChild->status == QUIT) {
+      Current->status = BLOCKED;
+      ReadyList = ReadyList->next_proc_ptr; //makes assumption that Current is head of ReadyList..
+    }
+    else {
+      *code = currChild->pid;
+    }
+  }
+  //no (unjoined) child has quit(), must wait;
+  return status;
 } /* join */
 
 
@@ -247,8 +288,7 @@ int join(int *code)
    Returns - nothing
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
-void quit(int code)
-{
+void quit(int code) {
    p1_quit(Current->pid);
 } /* quit */
 
@@ -263,11 +303,50 @@ void quit(int code)
    Returns - nothing
    Side Effects - the context of the machine is changed
    ----------------------------------------------------------------------- */
-void dispatcher(void)
-{
-   proc_ptr next_process;
+static void insertRL(proc_ptr proc) {
+  proc_ptr walker, previous;
+  previous = NULL;
+  walker = ReadyList;
 
-   p1_switch(Current->pid, next_process->pid);
+  while(walker != NULL && walker->priority <= proc->priority) {
+    previous = walker;
+    walker = walker->next_proc_ptr;
+  }
+
+  if (previous == NULL) {
+      /*process goes at front of ReadyList */
+      proc->next_proc_ptr = ReadyList;
+      ReadyList = proc;
+  }
+  else {
+    /*process goes after previous */
+    previous->next_proc_ptr = proc;
+    proc->next_proc_ptr = walker;
+  }
+
+  return;
+}
+
+void dispatcher(void) {
+   proc_ptr next_process = ReadyList;
+
+   //NOTE: implement check for quantum or if it has been time sliced later..
+   if (Current->status == READY) {
+      //check to see if current process is still highest priority amongst
+      //Ready processes
+      if (Current->priority > next_process->priority) {
+        insertRL(Current)
+        context_switch(Current->state, next_process->state);
+        p1_switch(Current->pid, next_process->pid);
+      }
+   }
+   else if (Current->status == BLOCKED) {
+     insertRL(Current)
+     context_switch(Current->state, next_process->state);
+   }
+
+
+
 } /* dispatcher */
 
 
@@ -282,8 +361,7 @@ void dispatcher(void)
    Side Effects -  if system is in deadlock, print appropriate error
 		   and halt.
    ----------------------------------------------------------------------- */
-int sentinel (char * dummy)
-{
+int sentinel (char * dummy) {
    if (DEBUG && debugflag)
       console("sentinel(): called\n");
    while (1)
@@ -295,16 +373,14 @@ int sentinel (char * dummy)
 
 
 /* check to determine if deadlock has occurred... */
-static void check_deadlock()
-{
+static void check_deadlock() {
 } /* check_deadlock */
 
 
 /*
  * Disables the interrupts.
  */
-void disableInterrupts()
-{
+void disableInterrupts() {
   /* turn the interrupts OFF iff we are in kernel mode */
   if((PSR_CURRENT_MODE & psr_get()) == 0) {
     //not in kernel mode
