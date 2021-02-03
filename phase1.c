@@ -1,18 +1,15 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/2/2021 9:30PM
+   Last Edit: 2/3/2021 12:08AM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: implement quit, lookup proper error messages, write empty zap,
-   test code. after that add time_slice and use sys.time, add deadlock however
-   that works.
+   TO-DO: do test00 and possibly test01. follow process step by step to ensure
+   correctness.
 
-   LAST DONE: (1) rough implementation of dispatcher and join. (2) implemented
-   getpid() and utilized the returned value inside fork1. (3) decided to call
-   dispatcher at end of fork1. may have to change that. i randomly inserted it.
+   LAST DONE: (1) rough implementation of quit(). need to test later.
    ------------------------------------------------------------------------ */
 #include <stdlib.h>
 #include <strings.h>
@@ -254,7 +251,7 @@ void launch()
    ------------------------------------------------------------------------ */
 int join(int *code) {
   //TO-DO: implement zap() and method to wait until child quits..
-  currChild = Current->child_proc_ptr;
+  proc_ptr currChild = Current->child_proc_ptr;
   //if there's no children then return -2
   if (currChild == NULL) {
     *code = -2;
@@ -275,7 +272,8 @@ int join(int *code) {
     }
   }
   //no (unjoined) child has quit(), must wait;
-  return status;
+
+  return code;
 } /* join */
 
 
@@ -289,7 +287,56 @@ int join(int *code) {
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
-   p1_quit(Current->pid);
+  int isParent = 0;
+  int currPID = Current->pid;
+
+  p1_quit(currPID);
+
+  //check to see if process has children first before trying to terminate it
+  if (Current->child_proc_ptr != NULL) {
+      isParent = 1;
+      proc_ptr currChild = Current->child_proc_ptr;
+      while (currChild->status != QUIT) {
+        currChild = currChild->next_sibling_ptr;
+      }
+      if (currChild->status != QUIT) {
+        console("pid: %d cannot quit with active child.\n", currPID);
+        halt(1);
+      }
+  }
+
+  //Check if parent was blocked due to a join operation
+  //first check to find out whose parent this child process belongs to
+
+  if (!isParent) {
+    proc_ptr parent;
+    proc_ptr walker = &ProcTable[0];
+    while (walker != NULL) {
+      if (walker->child_proc_ptr != NULL) {
+        proc_ptr wChild = walker->child_proc_ptr;
+        if (wChild->pid == currPID) {
+          parent = walker;
+        }
+      }
+      walker = walker->next_sibling_ptr;
+    }
+
+    //now check to see if parent is in readylist to see if its blocked
+    if (parent->status == BLOCKED) {
+      parent->status = READY;
+      insertRL(parent);
+    }
+    else if (parent->status == QUIT) {
+      console("child process: %d is an orphan.\n", currPID);
+      halt(1);
+    }
+  }
+
+  //otherwise mark status of process as QUIT
+  Current->status = QUIT;
+  Current = Current->next_proc_ptr;
+
+  return code;
 } /* quit */
 
 
