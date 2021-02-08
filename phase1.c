@@ -12,6 +12,7 @@
    LAST DONE: (1) rough implementation of quit(). need to test later.
    ------------------------------------------------------------------------ */
 #include <stdlib.h>
+#include <string.h>
 #include <strings.h>
 #include <stdio.h>
 #include <phase1.h>
@@ -153,13 +154,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    /* Return if stack size is too small */
    if (stacksize <= USLOSS_MIN_STACK) {
      console("stacksize is too small.\n");
-     halt(1)
+     halt(1);
    }
 
    /* Check for valid priority (ADDED) */
    if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY) {
      console("invalid priority given.\n");
-     halt(1)
+     halt(1);
    }
 
    /* find an empty slot in the process table */
@@ -167,7 +168,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    //searching for process that doesn't have a priority assigned yet. may
    //change this later.
    proc_slot = 0;
-   proc_ptr currProccess = &ProcTable[proc_slot]
+   proc_ptr currProccess = &ProcTable[proc_slot];
    while (currProccess->priority != 0) {
      currProccess = currProccess->next_sibling_ptr;
      proc_slot++;
@@ -202,7 +203,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
    //NOTE: not sure where else to call dispatcher for now
    Current = &ProcTable[proc_slot];
-   dispatcher();
+    //Where does this go?
+    //dispatcher();
 
    return ProcTable[proc_slot].pid;
 
@@ -388,7 +390,7 @@ void dispatcher(void) {
       }
    }
    else if (Current->status == BLOCKED) {
-     insertRL(Current)
+     insertRL(Current);
      context_switch(Current->state, next_process->state);
    }
 
@@ -422,7 +424,10 @@ int sentinel (char * dummy) {
 /* check to determine if deadlock has occurred... */
 static void check_deadlock() {
 } /* check_deadlock */
-
+    int check_io()
+    {
+        return 0;
+    }
 
 /*
  * Disables the interrupts.
