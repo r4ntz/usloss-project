@@ -23,8 +23,9 @@
 #include <unistd.h>
 
 /* ------------------------- Prototypes ----------------------------------- */
-int sentinel (void *);
+int sentinel (char *); //from (void *) to (char *dummy)
 extern int start1 (char *);
+extern int check_io();
 void dispatcher(void);
 void launch();
 static void enableInterrupts();
@@ -40,6 +41,7 @@ int debugflag = 1;
 proc_struct ProcTable[MAXPROC];
 
 /* Process lists  */
+proc_ptr ReadyList;
 
 /* current process ID */
 proc_ptr Current;
@@ -77,7 +79,6 @@ void startup()
    if (DEBUG && debugflag)
       console("startup(): initializing the Ready & Blocked lists\n");
 
-   proc_ptr ReadyList;
 
    /* Initialize the clock interrupt handler */
    //NOTE: defer working on this until fork1, join, quit, and dispatcher are working
@@ -239,6 +240,30 @@ void launch()
 } /* launch */
 
 
+static void insertRL(proc_ptr proc) {
+  proc_ptr walker, previous;
+  previous = NULL;
+  walker = ReadyList;
+
+  while(walker != NULL && walker->priority <= proc->priority) {
+    previous = walker;
+    walker = walker->next_proc_ptr;
+  }
+
+  if (previous == NULL) {
+      /*process goes at front of ReadyList */
+      proc->next_proc_ptr = ReadyList;
+      ReadyList = proc;
+  }
+  else {
+    /*process goes after previous */
+    previous->next_proc_ptr = proc;
+    proc->next_proc_ptr = walker;
+  }
+
+  return;
+}
+
 /* ------------------------------------------------------------------------
    Name - join
    Purpose - Wait for a child process (if one has been forked) to quit.  If
@@ -352,29 +377,6 @@ void quit(int code) {
    Returns - nothing
    Side Effects - the context of the machine is changed
    ----------------------------------------------------------------------- */
-static void insertRL(proc_ptr proc) {
-  proc_ptr walker, previous;
-  previous = NULL;
-  walker = ReadyList;
-
-  while(walker != NULL && walker->priority <= proc->priority) {
-    previous = walker;
-    walker = walker->next_proc_ptr;
-  }
-
-  if (previous == NULL) {
-      /*process goes at front of ReadyList */
-      proc->next_proc_ptr = ReadyList;
-      ReadyList = proc;
-  }
-  else {
-    /*process goes after previous */
-    previous->next_proc_ptr = proc;
-    proc->next_proc_ptr = walker;
-  }
-
-  return;
-}
 
 void dispatcher(void) {
    proc_ptr next_process = ReadyList;
@@ -424,11 +426,8 @@ int sentinel (char * dummy) {
 /* check to determine if deadlock has occurred... */
 static void check_deadlock() {
 } /* check_deadlock */
-    int check_io()
-    {
-        return 0;
-    }
-
+    check_io();
+    waitint();
 /*
  * Disables the interrupts.
  */

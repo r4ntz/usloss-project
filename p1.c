@@ -19,3 +19,7 @@ void p1_quit(int pid) {
     console("p1_quit() called: pid = %d\n", pid);
   }
 }
+
+int check_io() {
+  return 0;
+}
