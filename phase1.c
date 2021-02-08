@@ -23,7 +23,7 @@
 #include <unistd.h>
 
 /* ------------------------- Prototypes ----------------------------------- */
-int sentinel (void *);
+int sentinel (char * dummy);
 extern int start1 (char *);
 void dispatcher(void);
 void launch();
@@ -40,6 +40,7 @@ int debugflag = 1;
 proc_struct ProcTable[MAXPROC];
 
 /* Process lists  */
+proc_ptr ReadyList;
 
 /* current process ID */
 proc_ptr Current;
@@ -77,7 +78,7 @@ void startup()
    if (DEBUG && debugflag)
       console("startup(): initializing the Ready & Blocked lists\n");
 
-   proc_ptr ReadyList;
+   //proc_ptr ReadyList;
 
    /* Initialize the clock interrupt handler */
    //NOTE: defer working on this until fork1, join, quit, and dispatcher are working
@@ -384,7 +385,7 @@ void dispatcher(void) {
       //check to see if current process is still highest priority amongst
       //Ready processes
       if (Current->priority > next_process->priority) {
-        insertRL(Current)
+        insertRL(Current);
         context_switch(Current->state, next_process->state);
         p1_switch(Current->pid, next_process->pid);
       }
