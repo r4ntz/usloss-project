@@ -20,6 +20,7 @@ struct proc_struct {
 
    /* other fields as needed... */
    int            start_time; /*NOTE: added 2/7 7:30PM */
+   int            zapped;
 };
 
 struct psr_bits {

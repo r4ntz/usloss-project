@@ -1,13 +1,12 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/8/2021 5PM.
+   Last Edit: 2/8/2021 7PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: implement zap() and is_zapped().
-   store blocked processes especially in zap() in BlockedList
+   TO-DO: implement zap(), fix and debug other functions, implement clock_handler
 
    CHANGES:
    I changed the use for proc attr 'status'
@@ -18,12 +17,15 @@
    stack is now being allocated memory in fork1. remember to dealloc stack
    in quit().
 
+   zapped is new attribute in kernel.h. used to indicate if process has been zapped
+
    ------------------------------------------------------------------------ */
 
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
+#include <sys/time.h>
 #include <phase1.h>
 #include "kernel.h"
 
@@ -35,6 +37,7 @@
 int sentinel (char *); //from (void *) to (char *dummy)
 extern int start1 (char *);
 extern int check_io();
+extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 void dispatcher(void);
 void launch();
 static void enableInterrupts();
@@ -129,12 +132,73 @@ void finish()
       console("in finish...\n");
 } /* finish */
 
+
 int getpid(void) {
   int pid = (int) getpid();
   return pid;
 }
-/* getpid */
 
+long int get_current_time(void) {
+  struct timeval current_time;
+  gettimeofday(&current_time, NULL);
+  return current_time.tv_usec;
+}
+
+void time_slice(void) {
+
+}
+
+int read_cur_start_time(void) {
+  return Current->start_time;
+}
+
+/* rough implementaion for function used in phase2 */
+int block_me(int new_status) {
+  if (new_status <= 10) {
+    console("block_me(): new_status is greater than 10 (val: %d)\n", new_status);
+    halt(1);
+  }
+
+  int zappd;
+  if ((zappd = is_zapped()) == 1) {
+      return -1;
+  }
+
+  //insertBL(Current);
+
+  return 0;
+}
+
+void clock_handler(int dev, void * unit){
+  return;
+}
+
+/* rough implementation for function used in phase2 */
+int unblock_proc(int pid){
+  if (Current->pid == pid) {
+    return -2;
+  }
+  int found = 0;
+  proc_ptr walker = BlockedList;
+  proc_ptr prev = BlockedList;
+  while (walker != NULL) {
+    if (walker->pid == pid) {
+      found = 1;
+      break;
+    }
+    walker = walker->next_proc_ptr;
+  }
+
+  if (found){
+    if (walker->status <= 10) return -2;
+    else if (walker->zapped) return -1;
+    proc_ptr nowReady = walker;
+    prev->next_proc_ptr = walker->next_proc_ptr;
+    insertRL(nowReady);
+    return 0;
+  }
+  else return -2;
+}
 /* ------------------------------------------------------------------------
    Name - fork1
    Purpose - Gets a new process from the process table and initializes
@@ -172,9 +236,6 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    }
 
    /* find an empty slot in the process table */
-   //NOTE:ADDED. preemptively linked processes via next_sibling_ptr earlier.
-   //searching for process that doesn't have a priority assigned yet. may
-   //change this later.
    proc_slot = 0;
    proc_ptr currProccess = &ProcTable[proc_slot];
    while (currProccess->priority != 0) {
@@ -199,9 +260,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
     ProcTable[proc_slot].pid = getpid(); //NOTE: added this
 
+    ProcTable[proc_slot].current_time = (int) get_current_time(); //NOTE: added this
+
+    //TO-DO: fill-in start_time using sys/time. get microseconds
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC)
     */
+
    ProcTable[proc_slot].stack = (char *) malloc(stacksize);
 
    context_init(&(ProcTable[proc_slot].state), psr_get(),
@@ -211,19 +276,30 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    /* for future phase(s) */
    p1_fork(ProcTable[proc_slot].pid);
 
-   //NOTE: not sure where else to call dispatcher for now
+
    Current = &ProcTable[proc_slot];
-    //Where does this go?
-    //dispatcher();
 
    return ProcTable[proc_slot].pid;
 }
 
 
+int is_zapped(void) {
+  int procPID = getpid();
+  proc_ptr walker = &ProcTable[0];
+  while (walker != NULL) {
+    if (walker->pid == procPID && walker->zapped) {
+        return 1;
+    }
+  }
+
+  return 0;
+}
+
 /* zap() does not return until zapped process has quit.
-*  returns -1 if calling process itself was zapped while in zap
-*  returns 0 if the zapped process has already quit
-*/
+ *  returns -1 if calling process itself was zapped while in zap
+ *  returns 0 if the zapped process has already quit
+ */
+
 int zap(int pid) {
   return 0;
 }
@@ -281,6 +357,20 @@ static void insertRL(proc_ptr proc) {
   return;
 }
 
+void insertBL(proc_ptr newProc) {
+  if (newProc == NULL) {
+    console("insertBL(): newProc is null. Halting..\n");
+    halt(1);
+  }
+  proc_ptr walker = BlockedList;
+  proc_ptr previous = BlockedList;
+
+  while (walker != NULL) {
+    prev = walker;
+    walker = walker->next_proc_ptr;
+  }
+  prev->next_proc_ptr = newProc;
+}
 /* ------------------------------------------------------------------------
    Name - join
    Purpose - Wait for a child process (if one has been forked) to quit.  If
@@ -305,13 +395,16 @@ int join(int * code) {
     while (currChild != NULL && !currChild->status) {
       currChild = currChild->next_sibling_ptr;
     }
-    //If no child process has quit before join is called, the
-    //parent is removed from the ready list and blocked.
-    if (currChild->status) {
-      Current = ReadyList->next_proc_ptr;
+    //If there are active children then block parent
+    if (!currChild->status) {
+      Current->status = *code;
+      insertBL(Current);
+      Current = currChild;
+      dispatcher()
     }
+    //otherwise we can simply return id of process
     else {
-      *code = currChild->pid;
+
     }
   }
   //no (unjoined) child has quit(), must wait;
@@ -377,7 +470,7 @@ void quit(int code) {
   }
 
   //otherwise mark status of process as QUIT
-  Current->status = QUIT;
+  free(Current->stack);
   Current = ReadyList;
   ReadyList = ReadyList->next_proc_ptr;
 
@@ -399,22 +492,19 @@ void quit(int code) {
    ----------------------------------------------------------------------- */
 
 void dispatcher(void) {
-   proc_ptr next_process = ReadyList;
+   proc_ptr next_process = ReadyList->next_proc_ptr;
 
    //NOTE: implement check for quantum or if it has been time sliced later..
-   if (Current->status == READY) {
-      //check to see if current process is still highest priority amongst
-      //Ready processes
-      if (Current->priority > next_process->priority) {
-        insertRL(Current);
-        context_switch(Current->state, next_process->state);
-        p1_switch(Current->pid, next_process->pid);
-      }
-   }
-   else if (Current->status == BLOCKED) {
-     insertRL(Current);
-     context_switch(Current->state, next_process->state);
-   }
+   //check to see if current process is still highest priority amongst
+   //Ready processes
+   if (next_process != NULL) {
+     if (Current->priority > next_process->priority) {
+       insertRL(Current);
+       context_switch(Current->state, next_process->state);
+       p1_switch(Current->pid, next_process->pid);
+     }
+  }
+
 
 
 
