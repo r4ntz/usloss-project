@@ -1,16 +1,25 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/3/2021 12:08AM.
+   Last Edit: 2/8/2021 5PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: do test00 and possibly test01. follow process step by step to ensure
-   correctness.
+   TO-DO: implement zap() and is_zapped().
+   store blocked processes especially in zap() in BlockedList
 
-   LAST DONE: (1) rough implementation of quit(). need to test later.
+   CHANGES:
+   I changed the use for proc attr 'status'
+   if proc is in ReadyList then it is ready, if proc is not in ReadyList
+   but has a 'status' other than zero then it has quit, if proc is not in
+   ReadyList but its status is zero then it is blocked
+
+   stack is now being allocated memory in fork1. remember to dealloc stack
+   in quit().
+
    ------------------------------------------------------------------------ */
+
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -42,6 +51,7 @@ proc_struct ProcTable[MAXPROC];
 
 /* Process lists  */
 proc_ptr ReadyList;
+proc_ptr BlockedList; //for processes that end up being zapped..
 
 /* current process ID */
 proc_ptr Current;
@@ -49,9 +59,6 @@ proc_ptr Current;
 /* the next pid to be assigned */
 unsigned int next_pid = SENTINELPID;
 
-#define READY 0
-#define BLOCKED 1
-#define QUIT 2
 
 /* -------------------------- Functions ----------------------------------- */
 /* ------------------------------------------------------------------------
@@ -195,6 +202,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC)
     */
+   ProcTable[proc_slot].stack = (char *) malloc(stacksize);
+
    context_init(&(ProcTable[proc_slot].state), psr_get(),
                 ProcTable[proc_slot].stack,
                 ProcTable[proc_slot].stacksize, launch);
@@ -208,8 +217,16 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
     //dispatcher();
 
    return ProcTable[proc_slot].pid;
+}
 
-} /* fork1 */
+
+/* zap() does not return until zapped process has quit.
+*  returns -1 if calling process itself was zapped while in zap
+*  returns 0 if the zapped process has already quit
+*/
+int zap(int pid) {
+  return 0;
+}
 
 /* ------------------------------------------------------------------------
    Name - launch
@@ -276,23 +293,22 @@ static void insertRL(proc_ptr proc) {
    Side Effects - If no child process has quit before join is called, the
                   parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
-int join(int *code) {
+int join(int * code) {
   //TO-DO: implement zap() and method to wait until child quits..
   proc_ptr currChild = Current->child_proc_ptr;
   //if there's no children then return -2
   if (currChild == NULL) {
-    *code = -2;
+    return -2;
   }
   //check to see if children quit
   else {
-    while (currChild != NULL && currChild->status != QUIT) {
+    while (currChild != NULL && !currChild->status) {
       currChild = currChild->next_sibling_ptr;
     }
     //If no child process has quit before join is called, the
     //parent is removed from the ready list and blocked.
-    if (currChild->status == QUIT) {
-      Current->status = BLOCKED;
-      ReadyList = ReadyList->next_proc_ptr; //makes assumption that Current is head of ReadyList..
+    if (currChild->status) {
+      Current = ReadyList->next_proc_ptr;
     }
     else {
       *code = currChild->pid;
@@ -315,6 +331,7 @@ int join(int *code) {
    ------------------------------------------------------------------------ */
 void quit(int code) {
   int isParent = 0;
+
   int currPID = Current->pid;
 
   p1_quit(currPID);
@@ -361,9 +378,12 @@ void quit(int code) {
 
   //otherwise mark status of process as QUIT
   Current->status = QUIT;
-  Current = Current->next_proc_ptr;
+  Current = ReadyList;
+  ReadyList = ReadyList->next_proc_ptr;
 
-  return code;
+  dispatcher();
+
+  return;
 } /* quit */
 
 
@@ -386,7 +406,7 @@ void dispatcher(void) {
       //check to see if current process is still highest priority amongst
       //Ready processes
       if (Current->priority > next_process->priority) {
-        insertRL(Current)
+        insertRL(Current);
         context_switch(Current->state, next_process->state);
         p1_switch(Current->pid, next_process->pid);
       }
