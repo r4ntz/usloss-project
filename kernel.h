@@ -1,5 +1,9 @@
 #define DEBUG 0
 
+#define QUIT 0
+#define BLOCKED 1
+#define READY 2
+
 typedef struct proc_struct proc_struct;
 
 typedef struct proc_struct * proc_ptr;
@@ -19,8 +23,10 @@ struct proc_struct {
    int            status;         /* READY, BLOCKED, QUIT, etc. */
 
    /* other fields as needed... */
-   int            start_time; /*NOTE: added 2/7 7:30PM */
+   int            start_time;
    int            zapped;
+   int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
+   proc_ptr       parent;
 };
 
 struct psr_bits {

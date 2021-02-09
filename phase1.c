@@ -1,17 +1,20 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/8/2021 8:45PM.
+   Last Edit: 2/9/2021 2:35PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: unblock all zapped processes when quitting, debug, arrange methods,
-   figure out how processes are connected via child_proc_ptr, implement clock_handler
+   TO-DO: fix anything involving status attr and check_ready/block functions,
+   unblock all zapped processes when quitting, debug,
+   figure out how processes are connected via child_proc_ptr, implement
+   clock_handler
 
    CHANGES:
-   added basic zap implementation. we are assuming that all blocked processes
-   are ones that have been zapped.
+   added new proc attr 'exit_code' which is a pointer. we will point it to
+   'code' from join(). got rid of check_ready_list and check_blocked_list.
+   need to fix everything associated with 'status' attr now.
 
    ------------------------------------------------------------------------ */
 
@@ -139,7 +142,7 @@ long int get_current_time(void) {
 }
 
 void time_slice(void) {
-
+  return;
 }
 
 int read_cur_start_time(void) {
@@ -443,8 +446,7 @@ int join(int * code) {
   //check to see if children quit
   else {
     while (currChild->next_proc_ptr != NULL) {
-       //easiest way to determine if process has quit is to check status
-       if (!currChild->status) {
+       if (currChild->status != QUIT) {
          if ((chk_rl = check_ready_list(currChild->pid)) == 1) {
            insertBL(Current);
            proc_ptr next = Current->next_proc_ptr;
@@ -463,27 +465,7 @@ int join(int * code) {
   return Current->pid;
 }
 
-/*
- * Make this less redundant later. Two functions below are essentially the same
- *
- */
-int check_blocked_list(int pid) {
-  proc_ptr walker = BlockedList;
-  while (walker != NULL) {
-    if (walker->pid == pid) return 1;
-    walker = walker->next_proc_ptr;
-  }
-  return 0;
-}
 
-int check_ready_list(int pid) {
-  proc_ptr walker = ReadyList;
-  while (walker != NULL) {
-    if (walker->pid == pid) return 1;
-    walker = walker->next_proc_ptr;
-  }
-  return 0;
-}
 /* ------------------------------------------------------------------------
    Name - quit
    Purpose - Stops the child process and notifies the parent of the death by
