@@ -1,15 +1,17 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/8/2021 7:45PM.
+   Last Edit: 2/8/2021 8:45PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: implement zap(), fix and debug other functions, implement clock_handler
+   TO-DO: unblock all zapped processes when quitting, debug, arrange methods,
+   figure out how processes are connected via child_proc_ptr, implement clock_handler
 
    CHANGES:
-   added check_ready_list, check_blocked_list, removeBL
+   added basic zap implementation. we are assuming that all blocked processes
+   are ones that have been zapped.
 
    ------------------------------------------------------------------------ */
 
@@ -318,7 +320,37 @@ int is_zapped(void) {
  */
 
 int zap(int pid) {
-  return 0;
+  proc_ptr walker;
+  proc_ptr prev;
+  int check = 0;
+  int found = 0;
+  if ((check = check_blocked_list(pid)) == 1) {
+    return -1;
+  }
+  else if ((check = check_ready_list(pid)) == 1) {
+    walker = ReadyList;
+    while (walker != NULL) {
+      if (walker->pid == pid) {
+        found = 1;
+        break;
+      }
+      prev = walker;
+      walker = walker->next_proc_ptr;
+    }
+  }
+  //if its in neither the readylist or blockedlist then it must have quit.
+  else return 0;
+
+  if (found) {
+    prev->zapped = 1;
+    insertBL(prev);
+    if (walker != NULL) {
+      prev->next_proc_ptr = walker->next_proc_ptr;
+    }
+    else prev->next_proc_ptr = NULL;
+  }
+  return 1;
+
 }
 
 /* ------------------------------------------------------------------------
@@ -401,6 +433,8 @@ void insertBL(proc_ptr newProc) {
 int join(int * code) {
   //TO-DO: implement zap() and method to wait until child quits..
   proc_ptr currChild = Current->child_proc_ptr;
+  int chk_rl = 0;
+  int chk_bl = 0;
 
   //if there's no children then return -2
   if (currChild == NULL) {
@@ -409,25 +443,25 @@ int join(int * code) {
   //check to see if children quit
   else {
     while (currChild->next_proc_ptr != NULL) {
+       //easiest way to determine if process has quit is to check status
+       if (!currChild->status) {
+         if ((chk_rl = check_ready_list(currChild->pid)) == 1) {
+           insertBL(Current);
+           proc_ptr next = Current->next_proc_ptr;
+           Current = currChild;
+           Current->next_proc_ptr = next;
+           dispatcher();
+         }
+         //wait till the blocked processes are ready.
+         else if ((chk_bl = check_blocked_list(currChild->pid)) == 1) {
+           zap(currChild->pid);
+         }
+      }
       currChild = currChild->next_sibling_ptr;
     }
-    //If there are active children then block parent
-    if (!currChild->status) {
-      Current->status = *code;
-      insertBL(Current);
-      Current = currChild;
-      dispatcher();
-    }
-    //otherwise we can simply return id of process
-    else {
-
-    }
   }
-  //no (unjoined) child has quit(), must wait;
-
-  return code;
-} /* join */
-
+  return Current->pid;
+}
 
 /*
  * Make this less redundant later. Two functions below are essentially the same
