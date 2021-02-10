@@ -7,14 +7,17 @@
    CSCV 452
 
    TO-DO: fix anything involving status attr and check_ready/block functions,
-   unblock all zapped processes when quitting, debug,
-   figure out how processes are connected via child_proc_ptr, implement
-   clock_handler
+   unblock all zapped processes when quitting, fix block_proc using getpid()
+   rather than current, implement clock_handler, find differences between
+   zapped and blocked processes, currently blocked processes under join get
+   zapped but not sure why i did that. look it up later
 
    CHANGES:
-   added new proc attr 'exit_code' which is a pointer. we will point it to
-   'code' from join(). got rid of check_ready_list and check_blocked_list.
-   need to fix everything associated with 'status' attr now.
+   -join() assigns exit_code the pointer from its parameter *code.
+   -added get_proc which returns a pointer to the process using its PID
+   -got rid of check_ready_list and check_blocked_list
+   -got rid of blocked_list
+
 
    ------------------------------------------------------------------------ */
 
@@ -206,8 +209,21 @@ void clock_handler(int dev, void * unit){
   return;
 }
 
+void removeRL(proc_ptr proc) {
+  if (ReadyList == NULL) return;
+  proc_ptr walker = ReadyList;
+  proc_ptr prev;
 
-static void insertRL(proc_ptr proc) {
+  while (walker->next_proc_ptr != NULL) {
+    if (proc->pid == walker->pid) break;
+    prev = walker;
+    walker = walker->next_proc_ptr;
+  }
+  prev->next_proc_ptr = walker->next_proc_ptr;
+  return;
+}
+
+void insertRL(proc_ptr proc) {
   proc_ptr walker, previous;
   previous = NULL;
   walker = ReadyList;
@@ -369,8 +385,10 @@ int zap(int pid) {
           found = 1;
           break;
         }
-        prev = walker;
-        walker = walker->next_proc_ptr;
+        else {
+          prev = walker;
+          walker = walker->next_proc_ptr;
+        }
       }
     }
     //this means it quit so just return 0
@@ -386,7 +404,10 @@ int zap(int pid) {
   if (found) {
     prev->status = 1;
     if (walker != NULL) {
+      walker->zapped = 1;
+      walker->status = BLOCKED;
       prev->next_proc_ptr = walker->next_proc_ptr;
+      dispatcher();
     }
     else prev->next_proc_ptr = NULL;
   }
@@ -448,22 +469,21 @@ int join(int * code) {
   //check to see if children quit
   else {
     while (currChild->next_proc_ptr != NULL) {
-       if (currChild->status != QUIT) {
-         if ((chk_rl = check_ready_list(currChild->pid)) == 1) {
-           insertBL(Current);
-           proc_ptr next = Current->next_proc_ptr;
-           Current = currChild;
-           Current->next_proc_ptr = next;
-           dispatcher();
-         }
-         //wait till the blocked processes are ready.
-         else if ((chk_bl = check_blocked_list(currChild->pid)) == 1) {
-           zap(currChild->pid);
-         }
+       if (currChild->status == READY) {
+        insertBL(Current);
+        proc_ptr next = Current->next_proc_ptr;
+        Current = currChild;
+        Current->next_proc_ptr = next;
+        dispatcher();
       }
+      //wait till the blocked processes are ready.
+      else if (currChild->status == BLOCKED ) {
+        zap(currChild->pid);
+      }
+
       currChild = currChild->next_sibling_ptr;
-    }
   }
+
   return Current->pid;
 }
 
@@ -567,14 +587,10 @@ void dispatcher(void) {
    if (next_process != NULL) {
      if (Current->priority > next_process->priority) {
        insertRL(Current);
-       context_switch(Current->state, next_process->state);
        p1_switch(Current->pid, next_process->pid);
+       context_switch(Current->state, next_process->state);
      }
   }
-
-
-
-
 } /* dispatcher */
 
 
