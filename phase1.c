@@ -51,7 +51,6 @@ proc_struct ProcTable[MAXPROC];
 
 /* Process lists  */
 proc_ptr ReadyList;
-proc_ptr BlockedList; //for processes that end up being zapped..
 
 /* current process ID */
 proc_ptr Current;
@@ -135,6 +134,49 @@ int getpid(void) {
   return pid;
 }
 
+/* insertChild()
+ * adds newly created child process to currently running
+ * process. add this in fork1() once child is filled w/attributes.
+ */
+void insertChild(proc_ptr child) {
+  proc_ptr walker = Current;
+  if (walker->child_proc_ptr != NULL) {
+    proc_ptr sibling = walker->child_proc_ptr;
+    while (sibling->next_sibling_ptr != NULL) {
+      sibling = sibling->next_sibling_ptr;
+    }
+    sibling->next_sibling_ptr = child;
+  }
+  else walker->child_proc_ptr = child;
+}
+
+proc_ptr get_proc(int pid) {
+  int found = 0;
+  proc_ptr walker;
+  //compare pid of each parent and their children
+  for (int i=0; i<MAXPROC; i++) {
+    walker = &ProcTable[i];
+    if (walker->pid == pid) {
+      found == 1;
+      goto found_proc;
+    }
+    else if (walker->child_proc_ptr != NULL) {
+      proc_ptr child = walker->child_proc_ptr;
+      while (child != NULL) {
+        if (child->pid == pid) {
+          found == 1;
+          goto FOUND_PROC;
+        }
+        child = child->next_sibling_ptr;
+
+      }
+    }
+    FOUND_PROC: break;
+  }
+
+  return walker; //handle cases where it points to NULL
+}
+
 long int get_current_time(void) {
   struct timeval current_time;
   gettimeofday(&current_time, NULL);
@@ -152,17 +194,11 @@ int read_cur_start_time(void) {
 /* rough implementaion for function used in phase2 */
 int block_me(int new_status) {
   if (new_status <= 10) {
-    console("block_me(): new_status is greater than 10 (val: %d)\n", new_status);
+    console("block_me(): new_status is less than 10 (val: %d)\n", new_status);
     halt(1);
   }
-
-  int zappd;
-  if ((zappd = is_zapped()) == 1) {
-      return -1;
-  }
-
+  if (Current->zapped) return -1;
   //insertBL(Current);
-
   return 0;
 }
 
@@ -200,23 +236,14 @@ int unblock_proc(int pid){
   if (Current->pid == pid) {
     return -2;
   }
-  int found = 0;
-  proc_ptr walker = BlockedList;
-  proc_ptr prev = BlockedList;
-  while (walker != NULL) {
-    if (walker->pid == pid) {
-      found = 1;
-      break;
-    }
-    walker = walker->next_proc_ptr;
-  }
+  proc_ptr unblock_this = get_proc(pid);
 
-  if (found){
-    if (walker->status <= 10) return -2;
-    else if (walker->zapped) return -1;
-    proc_ptr nowReady = walker;
-    prev->next_proc_ptr = walker->next_proc_ptr;
-    insertRL(nowReady);
+  if (unblock_this != NULL) {
+    if (unblock_this->status <= 10) return -2;
+    else if (unblock_this->status == BLOCKED) return -2;
+    else if (unblock_this->zapped) return -1;
+
+    insertRL(unblock_this);
     return 0;
   }
   else return -2;
@@ -298,8 +325,9 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    /* for future phase(s) */
    p1_fork(ProcTable[proc_slot].pid);
 
-
-   Current = &ProcTable[proc_slot];
+   //NOTE: added 2/9. **current should be swapped when its status changes
+   if (Current == NULL) Current = &ProcTable[proc_slot];
+   else insertChild(&ProcTable[proc_slot]);
 
    return ProcTable[proc_slot].pid;
 }
@@ -320,33 +348,43 @@ int is_zapped(void) {
 /* zap() does not return until zapped process has quit.
  *  returns -1 if calling process itself was zapped while in zap
  *  returns 0 if the zapped process has already quit
+ *
+ *  NOTE: think of creating a function that removes procs from readylist
  */
 
 int zap(int pid) {
+  proc_ptr zap_this_proc = get_proc(pid);
   proc_ptr walker;
   proc_ptr prev;
-  int check = 0;
   int found = 0;
-  if ((check = check_blocked_list(pid)) == 1) {
-    return -1;
-  }
-  else if ((check = check_ready_list(pid)) == 1) {
-    walker = ReadyList;
-    while (walker != NULL) {
-      if (walker->pid == pid) {
-        found = 1;
-        break;
-      }
-      prev = walker;
-      walker = walker->next_proc_ptr;
-    }
-  }
-  //if its in neither the readylist or blockedlist then it must have quit.
-  else return 0;
 
+  if (zap_this_proc != NULL) {
+    if (zap_this_proc->status == BLOCKED) {
+      return -1;
+    }
+    else if (zap_this_proc->status == READY) {
+      walker = ReadyList;
+      while (walker != NULL) {
+        if (walker->pid == pid) {
+          found = 1;
+          break;
+        }
+        prev = walker;
+        walker = walker->next_proc_ptr;
+      }
+    }
+    //this means it quit so just return 0
+    else return 0;
+  }
+
+  else {
+    console("process (pid: %d) does not exist.\n");
+    halt(1);
+  }
+
+  //at this point, this means that the process is ready. now we zap
   if (found) {
-    prev->zapped = 1;
-    insertBL(prev);
+    prev->status = 1;
     if (walker != NULL) {
       prev->next_proc_ptr = walker->next_proc_ptr;
     }
@@ -385,42 +423,6 @@ void launch()
 } /* launch */
 
 
-void removeBL(int pid) {
-  int found = 0;
-  proc_ptr walker = BlockedList;
-  proc_ptr prev = BlockedList;
-  while (walker != NULL) {
-    if (walker->pid == pid) {
-      found = 1;
-      break;
-    }
-    prev = walker;
-    walker = walker->next_proc_ptr;
-  }
-
-  if (found && walker != NULL && prev != NULL) {
-      prev->next_proc_ptr = walker->next_proc_ptr;
-  }
-  else {
-    console("could not find process with pid %d in BlockedList.\n", pid);
-    halt(1);
-  }
-}
-
-void insertBL(proc_ptr newProc) {
-  if (newProc == NULL) {
-    console("insertBL(): newProc is null. Halting..\n");
-    halt(1);
-  }
-  proc_ptr walker = BlockedList;
-  proc_ptr prev = BlockedList;
-
-  while (walker != NULL) {
-    prev = walker;
-    walker = walker->next_proc_ptr;
-  }
-  prev->next_proc_ptr = newProc;
-}
 /* ------------------------------------------------------------------------
    Name - join
    Purpose - Wait for a child process (if one has been forked) to quit.  If

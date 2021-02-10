@@ -23,8 +23,8 @@ struct proc_struct {
    int            status;         /* READY, BLOCKED, QUIT, etc. */
 
    /* other fields as needed... */
-   int            start_time;
    int            zapped;
+   int            start_time;
    int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
    proc_ptr       parent;
 };
