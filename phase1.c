@@ -6,17 +6,10 @@
 
    CSCV 452
 
-   TO-DO: fix anything involving status attr and check_ready/block functions,
-   unblock all zapped processes when quitting, fix block_proc using getpid()
-   rather than current, implement clock_handler, find differences between
-   zapped and blocked processes, currently blocked processes under join get
-   zapped but not sure why i did that. look it up later
+   TO-DO: debug and figure out what the hell I'm supposed to do right now
 
    CHANGES:
-   -join() assigns exit_code the pointer from its parameter *code.
-   -added get_proc which returns a pointer to the process using its PID
-   -got rid of check_ready_list and check_blocked_list
-   -got rid of blocked_list
+   -overhauled join() and zap()
 
 
    ------------------------------------------------------------------------ */
@@ -77,12 +70,9 @@ void startup()
    int result; /* value returned by call to fork1() */
 
    /* initialize the process table */
-   //NOTE: adjust other attributes if necessary. just linking siblings
+   //may need to indicate that processes havent started idk
    for (i = 0; i < MAXPROC; i++) {
      ProcTable[i].priority = 0; //need to initialize value otherwise undefined behavior
-     if ((i+1) != MAXPROC) {
-       ProcTable[i].next_sibling_ptr = &ProcTable[i+1];
-     }
    }
    /* Initialize the Ready list, etc. */
    if (DEBUG && debugflag)
@@ -161,7 +151,7 @@ proc_ptr get_proc(int pid) {
     walker = &ProcTable[i];
     if (walker->pid == pid) {
       found == 1;
-      goto found_proc;
+      goto FOUND_PROC;
     }
     else if (walker->child_proc_ptr != NULL) {
       proc_ptr child = walker->child_proc_ptr;
@@ -201,7 +191,6 @@ int block_me(int new_status) {
     halt(1);
   }
   if (Current->zapped) return -1;
-  //insertBL(Current);
   return 0;
 }
 
@@ -327,7 +316,6 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
     ProcTable[proc_slot].start_time = (int) get_current_time(); //NOTE: added this
 
-    //TO-DO: fill-in start_time using sys/time. get microseconds
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC)
     */
@@ -351,14 +339,9 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
 int is_zapped(void) {
   int procPID = getpid();
-  proc_ptr walker = &ProcTable[0];
-  while (walker != NULL) {
-    if (walker->pid == procPID && walker->zapped) {
-        return 1;
-    }
-  }
-
-  return 0;
+  proc_ptr check_zap = get_proc(procID);
+  if (check_zap != NULL && check_zap->zapped == 1) return 1;
+  else return 0;
 }
 
 /* zap() does not return until zapped process has quit.
@@ -375,7 +358,7 @@ int zap(int pid) {
   int found = 0;
 
   if (zap_this_proc != NULL) {
-    if (zap_this_proc->status == BLOCKED) {
+    if (zap_this_proc->zapped == 1) {
       return -1;
     }
     else if (zap_this_proc->status == READY) {
@@ -459,8 +442,6 @@ void launch()
 int join(int * code) {
   //TO-DO: implement zap() and method to wait until child quits..
   proc_ptr currChild = Current->child_proc_ptr;
-  int chk_rl = 0;
-  int chk_bl = 0;
 
   //if there's no children then return -2
   if (currChild == NULL) {
@@ -470,17 +451,12 @@ int join(int * code) {
   else {
     while (currChild->next_proc_ptr != NULL) {
        if (currChild->status == READY) {
-        insertBL(Current);
-        proc_ptr next = Current->next_proc_ptr;
-        Current = currChild;
-        Current->next_proc_ptr = next;
-        dispatcher();
+        //"zap does not return until the zapped process has called quit"
+        int has_quit = zap(currChild->pid);
+        if (has_quit) return currChild->pid;
+        else return -1;
       }
-      //wait till the blocked processes are ready.
-      else if (currChild->status == BLOCKED ) {
-        zap(currChild->pid);
-      }
-
+      //not sure what to do with blocked processes here yet
       currChild = currChild->next_sibling_ptr;
   }
 
@@ -498,68 +474,22 @@ int join(int * code) {
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
-  int isParent = 0;
-  int currPID = Current->pid;
-
-  p1_quit(currPID);
-
-  //check to see if process has children first before trying to terminate it
-  if (Current->child_proc_ptr != NULL) {
-      proc_ptr currChild = Current->child_proc_ptr;
-      int activeChildExists;
-      while ((activeChildExists = check_ready_list(currChild->pid)) != 1) {
-        currChild = currChild->next_sibling_ptr;
-      }
-      if (activeChildExists) {
-        proc_ptr old = Current;
-        Current = Current->child_proc_ptr;
-        insertBL(old);
-      }
-
-      //no active children so we can terminate it yay
-      else {
-          Current->status = code;
-          Current = Current->next_proc_ptr;
-      }
-
-      isParent = 1;
-  }
-
-  //Check if parent was blocked due to a join operation
-  //first check to find out whose parent this child process belongs to
-
-  if (!isParent) {
-    proc_ptr parent;
-    proc_ptr walker = &ProcTable[0];
-    while (walker != NULL) {
-      if (walker->child_proc_ptr != NULL) {
-        proc_ptr wChild = walker->child_proc_ptr;
-        if (wChild->pid == currPID) {
-          parent = walker;
-        }
-      }
-      walker = walker->next_sibling_ptr;
-    }
-
-    //now check to see if parent is in readylist to see if its blocked
-    if (parent != NULL) {
-      int chk_rl = check_ready_list(parent->pid);
-      int chk_bl = check_blocked_list(parent->pid);
-      if (chk_rl == 0 && chk_bl == 0) {
-        removeBL(parent->pid);
-        insertRL(parent);
-      }
-      //otherwise child is orphan which is not supposed to happen..
-      else {
-        console("child process: %d is an orphan.\n", currPID);
+  proc_ptr currChild = Current->child_proc_ptr;
+  if (currChild != NULL) {
+    while (currChild != NULL) {
+      if (currChild->status == BLOCKED || currChild->status == READY) {
+        console("Process (pid %d) tried to quit with active children.\n", Current->pid);
         halt(1);
       }
+      else free(currChild->stack);
+
+      currChild = currChild->next_sibling_ptr;
     }
   }
   //otherwise mark status of process as QUIT
   free(Current->stack);
-  Current = ReadyList;
-  ReadyList = ReadyList->next_proc_ptr;
+  if (Current->zapped == 1) Current->zapped = 0;
+  Current->status = QUIT;
 
   dispatcher();
 
