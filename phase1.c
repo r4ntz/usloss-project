@@ -1,14 +1,16 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/9/2021 2:35PM.
+   Last Edit: 2/10/2021 6PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: debug and figure out what the hell I'm supposed to do right now
+   TO-DO: debug for test00, implement clock_handler and enable_interrupts
+   when test00 runs fine
 
    CHANGES:
+   -debugged so that the program finally runs (albeit not correctly)
    -overhauled join() and zap()
 
 
@@ -144,22 +146,15 @@ void insertChild(proc_ptr child) {
 }
 
 proc_ptr get_proc(int pid) {
-  int found = 0;
   proc_ptr walker;
   //compare pid of each parent and their children
   for (int i=0; i<MAXPROC; i++) {
     walker = &ProcTable[i];
-    if (walker->pid == pid) {
-      found == 1;
-      goto FOUND_PROC;
-    }
+    if (walker->pid == pid) goto FOUND_PROC;
     else if (walker->child_proc_ptr != NULL) {
       proc_ptr child = walker->child_proc_ptr;
       while (child != NULL) {
-        if (child->pid == pid) {
-          found == 1;
-          goto FOUND_PROC;
-        }
+        if (child->pid == pid) goto FOUND_PROC;
         child = child->next_sibling_ptr;
 
       }
@@ -339,7 +334,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
 int is_zapped(void) {
   int procPID = getpid();
-  proc_ptr check_zap = get_proc(procID);
+  proc_ptr check_zap = get_proc(procPID);
   if (check_zap != NULL && check_zap->zapped == 1) return 1;
   else return 0;
 }
@@ -458,6 +453,7 @@ int join(int * code) {
       }
       //not sure what to do with blocked processes here yet
       currChild = currChild->next_sibling_ptr;
+    }
   }
 
   return Current->pid;
@@ -474,6 +470,8 @@ int join(int * code) {
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
+  p1_quit(Current->pid);
+
   proc_ptr currChild = Current->child_proc_ptr;
   if (currChild != NULL) {
     while (currChild != NULL) {
@@ -518,7 +516,7 @@ void dispatcher(void) {
      if (Current->priority > next_process->priority) {
        insertRL(Current);
        p1_switch(Current->pid, next_process->pid);
-       context_switch(Current->state, next_process->state);
+       context_switch(&Current->state, &next_process->state);
      }
   }
 } /* dispatcher */
@@ -538,19 +536,26 @@ void dispatcher(void) {
 int sentinel (char * dummy) {
    if (DEBUG && debugflag)
       console("sentinel(): called\n");
-   while (1)
-   {
+   while (1) {
       check_deadlock();
       waitint();
    }
+   return 1;
 } /* sentinel */
 
 
 /* check to determine if deadlock has occurred... */
 static void check_deadlock() {
-} /* check_deadlock */
-    check_io();
-    waitint();
+  /* check_deadlock */
+  check_io();
+  return;
+}
+
+
+static void enableInterrupts() {
+  return;
+}
+
 /*
  * Disables the interrupts.
  */
@@ -560,7 +565,9 @@ void disableInterrupts() {
     //not in kernel mode
     console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
     halt(1);
-  } else
-    /* We ARE in kernel mode */
-    psr_set( psr_get() & ~PSR_CURRENT_INT );
-} /* disableInterrupts */
+  }
+  else psr_set( psr_get() & ~PSR_CURRENT_INT );
+
+  return;
+}
+/* disableInterrupts */
