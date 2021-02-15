@@ -33,6 +33,7 @@ int sentinel (char *); //from (void *) to (char *dummy)
 extern int start1 (char *);
 extern int check_io();
 extern void (*int_vec[NUM_INTS])(int dev, void * unit);
+extern void dump_processes(void);
 void dispatcher(void);
 void launch();
 static void enableInterrupts();
@@ -124,7 +125,7 @@ void finish()
 } /* finish */
 
 
-int getpid(void) {
+int getpidphase1(void) {
   int pid = (int) getpid();
   return pid;
 }
@@ -273,14 +274,18 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
      halt(1);
    }
    /* Return if stack size is too small */
-   if (stacksize <= USLOSS_MIN_STACK) {
+   if (stacksize < USLOSS_MIN_STACK) {
      console("stacksize is too small.\n");
      halt(1);
    }
-
+	
+   int i = strcmp(name, "sentinel");
+   if (i == 0);
+	
    /* Check for valid priority (ADDED) */
-   if (priority < LOWEST_PRIORITY || priority > HIGHEST_PRIORITY) {
-     console("invalid priority given.\n");
+   else if ((priority <= MINPRIORITY) || (priority >= MAXPRIORITY)) {
+     	 console("priority is %d. max: %d, min: %d", priority, MINPRIORITY, MAXPRIORITY);
+	 //console("invalid priority given.\n");
      halt(1);
    }
 
@@ -307,7 +312,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    else
       strcpy(ProcTable[proc_slot].start_arg, arg);
 
-    ProcTable[proc_slot].pid = getpid(); //NOTE: added this
+    ProcTable[proc_slot].pid = getpidphase1(); //NOTE: added this
 
     ProcTable[proc_slot].start_time = (int) get_current_time(); //NOTE: added this
 
@@ -333,7 +338,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 
 
 int is_zapped(void) {
-  int procPID = getpid();
+  int procPID = getpidphase1();
   proc_ptr check_zap = get_proc(procPID);
   if (check_zap != NULL && check_zap->zapped == 1) return 1;
   else return 0;
@@ -571,3 +576,27 @@ void disableInterrupts() {
   return;
 }
 /* disableInterrupts */
+
+
+/* ------------------------------------------------------------------------
+   Name - dump_processes
+   Purpose - Print process information to the console.
+		For each PCB in the process:
+			-table print (at a minimum) its PID
+			-parent’s PID
+			-priority
+			-process status (e.g. unused,running, ready, blocked, etc.)
+			-# of children
+			-CPU time consumed
+			-name
+
+   Parameters - none
+   Returns - nothing
+   Side Effects -  ????
+   
+   ----------------------------------------------------------------------- */
+
+void dump_processes(void) {
+	return;
+}
+/* dump_processes */
