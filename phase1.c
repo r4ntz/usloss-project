@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/10/2021 6PM.
+   Last Edit: 2/14/2021 7:30PM.
 
    phase1.c
 
@@ -10,8 +10,8 @@
    when test00 runs fine
 
    CHANGES:
-   -debugged so that the program finally runs (albeit not correctly)
-   -overhauled join() and zap()
+   -finally assigned stacksize attribute of proc_struct and fixed
+   conditional which checked if sentinel otherwise compare to min and max values
 
 
    ------------------------------------------------------------------------ */
@@ -278,13 +278,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
      console("stacksize is too small.\n");
      halt(1);
    }
-	
+
    int i = strcmp(name, "sentinel");
    if (i == 0);
-	
+
    /* Check for valid priority (ADDED) */
-   else if ((priority <= MINPRIORITY) || (priority >= MAXPRIORITY)) {
-     	 console("priority is %d. max: %d, min: %d", priority, MINPRIORITY, MAXPRIORITY);
+   else if ((priority < MINPRIORITY) && (priority > MAXPRIORITY)) {
+     	 console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
 	 //console("invalid priority given.\n");
      halt(1);
    }
@@ -321,6 +321,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
     */
 
    ProcTable[proc_slot].stack = (char *) malloc(stacksize);
+   ProcTable[proc_slot].stacksize = stacksize;
 
    context_init(&(ProcTable[proc_slot].state), psr_get(),
                 ProcTable[proc_slot].stack,
@@ -593,7 +594,7 @@ void disableInterrupts() {
    Parameters - none
    Returns - nothing
    Side Effects -  ????
-   
+
    ----------------------------------------------------------------------- */
 
 void dump_processes(void) {
