@@ -26,7 +26,7 @@ struct proc_struct {
    int            zapped;
    int            start_time;
    int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
-   proc_ptr       parent;
+   proc_ptr       parent_ptr;
 };
 
 struct psr_bits {
@@ -48,3 +48,4 @@ union psr_values {
 #define MAXPRIORITY 1
 #define SENTINELPID 1
 #define SENTINELPRIORITY LOWEST_PRIORITY
+#define MAXTIME 80 //milliseconds

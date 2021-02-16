@@ -20,7 +20,6 @@
 #include <string.h>
 #include <strings.h>
 #include <stdio.h>
-#include <sys/time.h>
 #include <phase1.h>
 #include "kernel.h"
 
@@ -67,6 +66,17 @@ unsigned int next_pid = SENTINELPID;
    Returns - nothing
    Side Effects - lots, starts the whole thing
    ----------------------------------------------------------------------- */
+void (*int_vec[NUM_INTS])(int dev, void * unit);
+
+void init_process(int index) {
+    ProcTable[index].pid = -1;
+    ProcTable[index].parent_ptr = NULL;
+    ProcTable[index].next_proc_ptr = NULL;
+    ProcTable[index].next_sibling_ptr = NULL;
+    ProcTable[index].zapped = 0;
+    ProcTable[index].status = READY;
+}
+
 void startup()
 {
    int i;      /* loop index */
@@ -75,7 +85,7 @@ void startup()
    /* initialize the process table */
    //may need to indicate that processes havent started idk
    for (i = 0; i < MAXPROC; i++) {
-     ProcTable[i].priority = 0; //need to initialize value otherwise undefined behavior
+     init_process(i);
    }
    /* Initialize the Ready list, etc. */
    if (DEBUG && debugflag)
@@ -83,7 +93,7 @@ void startup()
 
 
    /* Initialize the clock interrupt handler */
-   //NOTE: defer working on this until fork1, join, quit, and dispatcher are working
+   int_vec[CLOCK_DEV] = clock_handler;
 
    /* startup a sentinel process */
    if (DEBUG && debugflag)
@@ -166,19 +176,44 @@ proc_ptr get_proc(int pid) {
   return walker; //handle cases where it points to NULL
 }
 
-long int get_current_time(void) {
-  struct timeval current_time;
-  gettimeofday(&current_time, NULL);
-  return current_time.tv_usec;
+
+/* Functions related to reading the elapsed time since
+ * execution and duration a process has been running
+ */
+
+//returns CPU time (in milleseconds) used by current process
+int readtime(void) {
+  int curr_time_since_boot = sys_clock();
+  int curr_time = read_cur_start_time();
+  //we divide by 1000 since we need to convert to millseconds
+  int cpu_time = (curr_time - curr_time_since_boot)/1000;
+
+  return cpu_time;
 }
 
+//returns length of microseconds since program has started running..
+int get_current_time(void) {
+  int time_since_boot = sys_clock();
+  return time_since_boot;
+}
+
+//checks to see if process has any time left for execution
 void time_slice(void) {
-  return;
+  int elapsed_time = readtime();
+  //this means that the time is up
+  if (MAXTIME - elapsed_time <= 0) {
+    dispatcher();
+  }
+  else enableInterrupts();
 }
 
+//just returns start_time attr which was assigned by get_current_time()
 int read_cur_start_time(void) {
   return Current->start_time;
 }
+
+/* --------- */
+
 
 /* rough implementaion for function used in phase2 */
 int block_me(int new_status) {
@@ -190,8 +225,18 @@ int block_me(int new_status) {
   return 0;
 }
 
+/* clock_handler()
+ * Don't need to invoke this function. USLOSS invokes this
+ * every 20 milliseconds (see USLOSS manual). After 4 approx. intervals it will
+ * reach the MAXTIME we have set. time_slice() checks this
+ */
 void clock_handler(int dev, void * unit){
-  return;
+  static int interval = 0;
+  interval++;
+  if (DEBUG && debugflag) {
+    console("clock_handler called. interval #%d\n", interval);
+  }
+  time_slice();
 }
 
 void removeRL(proc_ptr proc) {
@@ -559,7 +604,13 @@ static void check_deadlock() {
 
 
 static void enableInterrupts() {
-  return;
+  //if we're not in kernel mode then halt
+  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
+    console("Kernel Error: Not in kernel mode, may not enable interrupts");
+    halt(1);
+  }
+  //if we are in kernel mode, then we can change bits
+  else psr_set(psr_get() | PSR_CURRENT_INT);
 }
 
 /*
