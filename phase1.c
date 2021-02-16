@@ -1,17 +1,22 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/14/2021 7:30PM.
+   Last Edit: 2/15/2021 9:50PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: debug for test00, implement clock_handler and enable_interrupts
-   when test00 runs fine
+   TO-DO: continue working on dispatcher(), continue to tweak because right now
+   its a clusterfuck, account for new attributes from kernel.h I added,
+   debug in general
 
    CHANGES:
-   -finally assigned stacksize attribute of proc_struct and fixed
-   conditional which checked if sentinel otherwise compare to min and max values
+   -kernel.h: num_children, time_sliced, RUNNING def/macro, changed maxtime
+   to 80ms from 80000 microseconds
+   -added interrupts and fixed deadlock
+   -PID assignment based on next_pid which was from skeleton and I somehow missed
+   -new method init_process()
+   -a bunch of other stuff. just compare changes in github because im braindead now
 
 
    ------------------------------------------------------------------------ */
@@ -48,7 +53,7 @@ int debugflag = 1;
 proc_struct ProcTable[MAXPROC];
 
 /* Process lists  */
-proc_ptr ReadyList;
+proc_struct ReadyList[SENTINELPRIORITY];
 
 /* current process ID */
 proc_ptr Current;
@@ -74,23 +79,27 @@ void init_process(int index) {
     ProcTable[index].next_proc_ptr = NULL;
     ProcTable[index].next_sibling_ptr = NULL;
     ProcTable[index].zapped = 0;
+    ProcTable[index].time_sliced = 0;
+    ProcTable[index].num_children = 0;
     ProcTable[index].status = READY;
 }
 
-void startup()
-{
+void startup() {
+   check_mode();
+
    int i;      /* loop index */
    int result; /* value returned by call to fork1() */
 
    /* initialize the process table */
-   //may need to indicate that processes havent started idk
    for (i = 0; i < MAXPROC; i++) {
      init_process(i);
    }
+
+   Current =  &ProcTable[MAXPROC-1];
+
    /* Initialize the Ready list, etc. */
    if (DEBUG && debugflag)
       console("startup(): initializing the Ready & Blocked lists\n");
-
 
    /* Initialize the clock interrupt handler */
    int_vec[CLOCK_DEV] = clock_handler;
@@ -128,17 +137,13 @@ void startup()
    Returns - nothing
    Side Effects - none
    ----------------------------------------------------------------------- */
-void finish()
-{
-   if (DEBUG && debugflag)
-      console("in finish...\n");
+void finish() {
+  check_mode();
+
+  if (DEBUG && debugflag)
+    console("in finish...\n");
 } /* finish */
 
-
-int getpidphase1(void) {
-  int pid = (int) getpid();
-  return pid;
-}
 
 /* insertChild()
  * adds newly created child process to currently running
@@ -202,6 +207,7 @@ void time_slice(void) {
   int elapsed_time = readtime();
   //this means that the time is up
   if (MAXTIME - elapsed_time <= 0) {
+    Current->time_sliced = 1;
     dispatcher();
   }
   else enableInterrupts();
@@ -240,8 +246,11 @@ void clock_handler(int dev, void * unit){
 }
 
 void removeRL(proc_ptr proc) {
-  if (ReadyList == NULL) return;
-  proc_ptr walker = ReadyList;
+  if (ReadyList[0].priority == -1) {
+    console("removeRL(): ReadyList is empty.\n")
+    halt(1);
+  }
+  proc_ptr walker = &ReadyList[0];
   proc_ptr prev;
 
   while (walker->next_proc_ptr != NULL) {
@@ -256,28 +265,53 @@ void removeRL(proc_ptr proc) {
 void insertRL(proc_ptr proc) {
   proc_ptr walker, previous;
   previous = NULL;
-  walker = ReadyList;
-
-  while(walker != NULL && walker->priority <= proc->priority) {
-    previous = walker;
-    walker = walker->next_proc_ptr;
+  walker = &ReadyList[0];
+  if (proc->time_sliced) {
+    while(walker->next_proc_ptr != NULL) {
+      walker->next_proc_ptr;
+    }
+    proc->time_sliced = 0;
+    walker->next_proc_ptr = proc;
   }
+  else {
+    while(walker != NULL && walker->priority <= proc->priority) {
+      previous = walker;
+      walker = walker->next_proc_ptr;
+    }
 
-  if (previous == NULL) {
+    if (previous == NULL) {
       /*process goes at front of ReadyList */
       proc->next_proc_ptr = ReadyList;
       ReadyList = proc;
-  }
-  else {
-    /*process goes after previous */
-    previous->next_proc_ptr = proc;
-    proc->next_proc_ptr = walker;
+    }
+    else {
+      /*process goes after previous */
+      previous->next_proc_ptr = proc;
+      proc->next_proc_ptr = walker;
+    }
   }
 
   return;
 }
 
 /* rough implementation for function used in phase2 */
+
+int block_me(int new_status) {
+  if (new_status <= 10) {
+    console("block_me(): new_status must be larger than ten. val: %d\n", new_status);
+    halt(1);
+  }
+  check_mode();
+  disableInterrupts();
+
+  Current->status = new_status;
+  removeRL(ReadyList[(Current->priority - 1)]);
+  dispatcher();
+
+  if (Current->zappd) return -1;
+
+  return 0;
+}
 int unblock_proc(int pid){
   if (Current->pid == pid) {
     return -2;
@@ -308,6 +342,8 @@ int unblock_proc(int pid){
    ------------------------------------------------------------------------ */
 int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
 {
+   check_mode();
+   disableInterrupts();
    int proc_slot;
 
    if (DEBUG && debugflag)
@@ -324,23 +360,21 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
      halt(1);
    }
 
-   int i = strcmp(name, "sentinel");
-   if (i == 0);
 
    /* Check for valid priority (ADDED) */
-   else if ((priority < MINPRIORITY) && (priority > MAXPRIORITY)) {
+   else if ((priority > MINPRIORITY || priority < MAXPRIORITY) && f != sentinel) {
      	 console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
 	 //console("invalid priority given.\n");
      halt(1);
    }
 
    /* find an empty slot in the process table */
-   proc_slot = 0;
-   proc_ptr currProccess = &ProcTable[proc_slot];
-   while (currProccess->priority != 0) {
-     currProccess = currProccess->next_sibling_ptr;
-     proc_slot++;
+   proc_slot = next_pid % MAXPROC;
+   while (ProcTable[proc_slot].priority != -1) {
+     next_pid++;
+     proc_slot = next_pid % MAXPROC;
    }
+
    /* fill-in entry in process table */
    if ( strlen(name) >= (MAXNAME - 1) ) {
       console("fork1(): Process name is too long.  Halting...\n");
@@ -357,7 +391,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    else
       strcpy(ProcTable[proc_slot].start_arg, arg);
 
-    ProcTable[proc_slot].pid = getpidphase1(); //NOTE: added this
+    ProcTable[proc_slot].pid = next_pid++;
 
     ProcTable[proc_slot].start_time = (int) get_current_time(); //NOTE: added this
 
@@ -376,9 +410,19 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    p1_fork(ProcTable[proc_slot].pid);
 
    //NOTE: added 2/9. **current should be swapped when its status changes
-   if (Current == NULL) Current = &ProcTable[proc_slot];
-   else insertChild(&ProcTable[proc_slot]);
+   if (Current->pid > -1) {
+     insertChild(&ProcTable[proc_slot]);
+     ProcTable[proc_slot].parent = Current;
+   }
 
+   insertRL(&ProcTable[proc_slot]);
+   ProcTable[proc_slot].status = READY;
+
+   if (f != sentinel) {
+     dispatcher();
+   }
+
+   enableInterrupts();
    return ProcTable[proc_slot].pid;
 }
 
@@ -486,15 +530,20 @@ void launch()
                   parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
 int join(int * code) {
-  //TO-DO: implement zap() and method to wait until child quits..
-  proc_ptr currChild = Current->child_proc_ptr;
+  check_mode();
+  disableInterrupts();
+
+  if (DEBUG && debugflag) console("join(): started\n");
 
   //if there's no children then return -2
-  if (currChild == NULL) {
+  if (Current->num_children == 0) {
     return -2;
   }
+
   //check to see if children quit
   else {
+    proc_ptr currChild = Current->child_proc_ptr;
+
     while (currChild->next_proc_ptr != NULL) {
        if (currChild->status == READY) {
         //"zap does not return until the zapped process has called quit"
@@ -507,6 +556,7 @@ int join(int * code) {
     }
   }
 
+  enableInterrupts();
   return Current->pid;
 }
 
@@ -558,11 +608,17 @@ void quit(int code) {
    ----------------------------------------------------------------------- */
 
 void dispatcher(void) {
-   proc_ptr next_process = ReadyList->next_proc_ptr;
+   check_mode();
+   disableInterrupts();
 
-   //NOTE: implement check for quantum or if it has been time sliced later..
-   //check to see if current process is still highest priority amongst
-   //Ready processes
+   proc_ptr next_process;
+
+   if (Current->status == RUNNING) {
+     Current->status = READY;
+     removeRL(Current);
+     insertRL(Current);
+   }
+   //check quantum and compare to MAXTIME
    if (next_process != NULL) {
      if (Current->priority > next_process->priority) {
        insertRL(Current);
@@ -570,6 +626,8 @@ void dispatcher(void) {
        context_switch(&Current->state, &next_process->state);
      }
   }
+
+  enableInterrupts();
 } /* dispatcher */
 
 
@@ -595,18 +653,37 @@ int sentinel (char * dummy) {
 } /* sentinel */
 
 
-/* check to determine if deadlock has occurred... */
+/* check_deadlock()
+ * This just checks to see if there are still running processes
+ */
 static void check_deadlock() {
-  /* check_deadlock */
-  check_io();
-  return;
+  int blockd = 0;
+  int rdy = 0;
+  for (int i=0; i<SENTINELPRIORITY-1; i++) {
+    if (ProcTable[i].status == READY) {
+      blockd = 1;
+      break;
+    }
+    else if (ProcTable[i].status = BLOCKED) {
+      rdy = 1;
+      break;
+    }
+    else continue;
+  }
+
+  if (blockd) return;
+  else if (ready) {
+    console("check_deadlock(): only sentinel should be left.\n")
+    halt(1);
+  }
+  else halt(0);
 }
 
 
 static void enableInterrupts() {
   //if we're not in kernel mode then halt
   if ((PSR_CURRENT_MODE & psr_get()) == 0) {
-    console("Kernel Error: Not in kernel mode, may not enable interrupts");
+    console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
     halt(1);
   }
   //if we are in kernel mode, then we can change bits
@@ -628,6 +705,18 @@ void disableInterrupts() {
   return;
 }
 /* disableInterrupts */
+
+
+/*
+ * check if process is in kernel mode and halt if it isnt
+ */
+
+void check_mode(void) {
+  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
+    console("Kernel Error: Not in kernel mode.\n");
+    halt(1);
+  }
+}
 
 
 /* ------------------------------------------------------------------------

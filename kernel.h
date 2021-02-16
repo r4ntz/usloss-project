@@ -3,6 +3,7 @@
 #define QUIT 0
 #define BLOCKED 1
 #define READY 2
+#define RUNNING 3
 
 typedef struct proc_struct proc_struct;
 
@@ -25,8 +26,10 @@ struct proc_struct {
    /* other fields as needed... */
    int            zapped;
    int            start_time;
+   int            time_sliced;
    int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
    proc_ptr       parent_ptr;
+   int            num_children;
 };
 
 struct psr_bits {
