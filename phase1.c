@@ -1,19 +1,15 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/65/2021 8:42PM.
+   Last Edit: 2/16/2021 9:30PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: adjust for changes (somewhat of a cluster rn) and debug, properly
-   implement start_time and cpu_time attrs from kernel.h
+   TO-DO: debug and fix what hasn't been accounted for, dump_processes()
 
    CHANGES:
-   -next_zappd_ptr and cpu_time kernel.h
-   -changed zap
-   -created new function insertZL() which adds to zap queue for a process
-   -more console() messages
+   -fixed zap(), fixed quit(), implemented removeZL()
 
 
    ------------------------------------------------------------------------ */
@@ -195,10 +191,17 @@ int get_current_time(void) {
 
 //checks to see if process has any time left for execution
 void time_slice(void) {
+  if (DEBUG && debugflag) console("time_slice(): started\n");
+  check_mode();
+  disableInterrupts();
+
   int elapsed_time = readtime();
   //this means that the time is up
   if (MAXTIME - elapsed_time <= 0) {
-    Current->time_sliced = 1;
+    Current->time_sliced++;
+  }
+  if (Current->time_sliced == 4) {
+    Current->time_sliced = 0;
     dispatcher();
   }
   else enableInterrupts();
@@ -417,6 +420,19 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    return ProcTable[proc_slot].pid;
 }
 
+//unblockes all zapped processes in current
+void removeZL(void) {
+  proc_ptr walker = Current->next_zappd_ptr;
+  while (walker != NULL) {
+    walker->status = READY;
+    insertRL(walker);
+    Current->zapped--;
+    walker = walker->next_zappd_ptr;
+  }
+
+  Current->next_zappd_ptr = NULL;
+}
+
 void insertZL(proc_ptr zap_this) {
   proc_ptr walker = zap_this;
   while (walker->next_zappd_ptr != NULL) {
@@ -517,31 +533,42 @@ int join(int * code) {
   check_mode();
   disableInterrupts();
 
+  int all_dead = 1;
+
   if (DEBUG && debugflag) console("join(): started\n");
 
   //if there's no children then return -2
   if (Current->num_children == 0) {
+    if (DEBUG && debugflag) console("join(): no children!\n");
     return -2;
   }
 
   //check to see if children quit
-  else {
-    proc_ptr currChild = Current->child_proc_ptr;
 
-    while (currChild->next_proc_ptr != NULL) {
-       if (currChild->status == READY) {
-        //"zap does not return until the zapped process has called quit"
-        int has_quit = zap(currChild->pid);
-        if (has_quit) return currChild->pid;
-        else return -1;
-      }
-      //not sure what to do with blocked processes here yet
-      currChild = currChild->next_sibling_ptr;
+  if (DEBUG && debugflag) console("join(): checking to see if children quit\n");
+  proc_ptr curr_child = Current->child_proc_ptr;
+  proc_ptr earliest_child = NULL;
+
+  while (curr_child->next_proc_ptr != NULL) {
+    if (curr_child->status == READY) all_dead = 0;
+    else if (curr_child->status == QUIT && earliest_child == NULL) {
+      earliest_child = curr_child;
     }
+    curr_child = curr_child->next_sibling_ptr;
+  }
+
+  if (all_dead) {
+    if (DEBUG && debugflag) console("join(): all children dead. removing from ReadyList and blocking\n");
+    Current->status = BLOCKED;
+    removeRL(Current);
+    dispatcher();
+  }
+  else if (earliest_child != NULL) {
+    *status = earliest_child->status;
   }
 
   enableInterrupts();
-  return Current->pid;
+  return earliest_child->pid;
 }
 
 
@@ -555,28 +582,36 @@ int join(int * code) {
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
-  p1_quit(Current->pid);
+  if (DEBUG && debugflag) console("quit(): started\n");
+  check_mode();
+  disable_interrupts();
 
-  proc_ptr currChild = Current->child_proc_ptr;
-  if (currChild != NULL) {
-    while (currChild != NULL) {
-      if (currChild->status == BLOCKED || currChild->status == READY) {
+  Current->status = QUIT;
+  removeRL(Current);
+
+  proc_ptr curr_child = Current->child_proc_ptr;
+  if (curr_child != NULL) {
+    while (curr_child != NULL) {
+      if (curr_child->status != QUIT) {
         console("Process (pid %d) tried to quit with active children.\n", Current->pid);
         halt(1);
       }
-      else free(currChild->stack);
-
-      currChild = currChild->next_sibling_ptr;
+      curr_child = curr_child->next_sibling_ptr;
     }
   }
-  //otherwise mark status of process as QUIT
-  free(Current->stack);
-  if (Current->zapped == 1) Current->zapped = 0;
-  Current->status = QUIT;
+  //unblock all processes that are zapped
+  if (Current->zapped) removeZL();
 
+  //free memory allocated to Current's stack and wipe attributes
+  free(Current->stack);
+  this_pid = Current->pid % MAXPROC;
+  init_process(this_pid);
+
+  p1_quit(Current->pid);
+
+  //this is so that the next process can run
   dispatcher();
 
-  return;
 } /* quit */
 
 /* helper function for dispatcher(). grabs procs with highest priority value */
