@@ -1,5 +1,6 @@
 #define DEBUG 0
 
+#define NOT_STARTED -1
 #define QUIT 0
 #define BLOCKED 1
 #define READY 2
@@ -10,7 +11,8 @@ typedef struct proc_struct proc_struct;
 typedef struct proc_struct * proc_ptr;
 
 struct proc_struct {
-   proc_ptr       next_proc_ptr;
+   proc_ptr       next_proc_ptr;  /* use this for the ReadyList on each process */
+   proc_ptr       next_zappd_ptr; /* use this for the zapped queue on each process */
    proc_ptr       child_proc_ptr;
    proc_ptr       next_sibling_ptr;
    char           name[MAXNAME];     /* process's name */
@@ -24,8 +26,9 @@ struct proc_struct {
    int            status;         /* READY, BLOCKED, QUIT, etc. */
 
    /* other fields as needed... */
-   int            zapped;
+   int            zapped; /* keeps track of number of zapped processes */
    int            start_time;
+   int            cpu_time;
    int            time_sliced;
    int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
    proc_ptr       parent_ptr;

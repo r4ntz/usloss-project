@@ -1,22 +1,19 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/15/2021 9:50PM.
+   Last Edit: 2/65/2021 8:42PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: continue working on dispatcher(), continue to tweak because right now
-   its a clusterfuck, account for new attributes from kernel.h I added,
-   debug in general
+   TO-DO: adjust for changes (somewhat of a cluster rn) and debug, properly
+   implement start_time and cpu_time attrs from kernel.h
 
    CHANGES:
-   -kernel.h: num_children, time_sliced, RUNNING def/macro, changed maxtime
-   to 80ms from 80000 microseconds
-   -added interrupts and fixed deadlock
-   -PID assignment based on next_pid which was from skeleton and I somehow missed
-   -new method init_process()
-   -a bunch of other stuff. just compare changes in github because im braindead now
+   -next_zappd_ptr and cpu_time kernel.h
+   -changed zap
+   -created new function insertZL() which adds to zap queue for a process
+   -more console() messages
 
 
    ------------------------------------------------------------------------ */
@@ -74,14 +71,22 @@ unsigned int next_pid = SENTINELPID;
 void (*int_vec[NUM_INTS])(int dev, void * unit);
 
 void init_process(int index) {
+    check_mode();
+    disableInterrupts();
+
     ProcTable[index].pid = -1;
     ProcTable[index].parent_ptr = NULL;
     ProcTable[index].next_proc_ptr = NULL;
+    ProcTable[index].next_zappd_ptr = NULL;
     ProcTable[index].next_sibling_ptr = NULL;
     ProcTable[index].zapped = 0;
     ProcTable[index].time_sliced = 0;
     ProcTable[index].num_children = 0;
     ProcTable[index].status = READY;
+    ProcTable[index].cpu_time = 0;
+    ProcTable[index].start_time = 0;
+
+    enableInterrupts();
 }
 
 void startup() {
@@ -162,23 +167,9 @@ void insertChild(proc_ptr child) {
 }
 
 proc_ptr get_proc(int pid) {
-  proc_ptr walker;
-  //compare pid of each parent and their children
-  for (int i=0; i<MAXPROC; i++) {
-    walker = &ProcTable[i];
-    if (walker->pid == pid) goto FOUND_PROC;
-    else if (walker->child_proc_ptr != NULL) {
-      proc_ptr child = walker->child_proc_ptr;
-      while (child != NULL) {
-        if (child->pid == pid) goto FOUND_PROC;
-        child = child->next_sibling_ptr;
-
-      }
-    }
-    FOUND_PROC: break;
-  }
-
-  return walker; //handle cases where it points to NULL
+  proc_ptr walker = &ProcTable[pid % MAXPROC];
+  if (walker->pid != pid) return NULL;
+  else return walker;
 }
 
 
@@ -426,11 +417,17 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    return ProcTable[proc_slot].pid;
 }
 
+void insertZL(proc_ptr zap_this) {
+  proc_ptr walker = zap_this;
+  while (walker->next_zappd_ptr != NULL) {
+    walker = walker->next_zappd_ptr;
+  }
+  Current->zapped++;
+  walker->next_zappd_ptr = Current;
+}
 
 int is_zapped(void) {
-  int procPID = getpidphase1();
-  proc_ptr check_zap = get_proc(procPID);
-  if (check_zap != NULL && check_zap->zapped == 1) return 1;
+  if (Current->zapped > 0) return 1;
   else return 0;
 }
 
@@ -442,49 +439,36 @@ int is_zapped(void) {
  */
 
 int zap(int pid) {
-  proc_ptr zap_this_proc = get_proc(pid);
-  proc_ptr walker;
-  proc_ptr prev;
-  int found = 0;
+  if (DEBUG && debugflag) console("zap(): starting\n");
+  check_mode();
+  disableInterrupts();
 
-  if (zap_this_proc != NULL) {
-    if (zap_this_proc->zapped == 1) {
-      return -1;
-    }
-    else if (zap_this_proc->status == READY) {
-      walker = ReadyList;
-      while (walker != NULL) {
-        if (walker->pid == pid) {
-          found = 1;
-          break;
-        }
-        else {
-          prev = walker;
-          walker = walker->next_proc_ptr;
-        }
-      }
-    }
-    //this means it quit so just return 0
-    else return 0;
-  }
-
-  else {
-    console("process (pid: %d) does not exist.\n");
+  //Current can't be zapped
+  if (Current->pid == pid) {
+    console("zap(): can't zap self\n");
     halt(1);
   }
 
-  //at this point, this means that the process is ready. now we zap
-  if (found) {
-    prev->status = 1;
-    if (walker != NULL) {
-      walker->zapped = 1;
-      walker->status = BLOCKED;
-      prev->next_proc_ptr = walker->next_proc_ptr;
-      dispatcher();
-    }
-    else prev->next_proc_ptr = NULL;
+  proc_ptr zap_parent = get_proc(pid);
+
+  if (zap_this == NULL) {
+      console("zap(): process (pid: %d) does not exist\n", pid);
+      halt(1);
   }
-  return 1;
+  else if (zap_this->status == QUIT) {
+    if (Current->zapped) return -1;
+    else return 0;
+  }
+
+  insertZL(zap_this);
+  Current=>status = BLOCKED;
+  removeRL(Current);
+  dispatcher();
+
+  enableInterrupts();
+
+  if (Current->zapped) return -1;
+  return 0;
 
 }
 
@@ -595,6 +579,30 @@ void quit(int code) {
   return;
 } /* quit */
 
+/* helper function for dispatcher(). grabs procs with highest priority value */
+proc_ptr get_highest_priority(int ProcTable_index) {
+  console("get_highest_priority(): finding process with highest priority\n")
+  proc_ptr return_this = NULL;
+  for (int i=0; i<SENTINELPRIORITY; i++) {
+    if (return_this == NULL) {
+      return_this = &ProcTable[ProcTable_index];
+    }
+    else if (return_this->priority > ProcTable[ProcTable_index].priority) {
+      return_this = &ProcTable[ProcTable_index];
+    }
+    else continue;
+  }
+
+  if (return_this != NULL) {
+    console("get_highest_priority(): found process\n")
+    return return_this;
+  }
+
+  else {
+    console("get_highest_priority(): could not any ready processes\n");
+    return NULL;
+  }
+}
 
 /* ------------------------------------------------------------------------
    Name - dispatcher
@@ -608,26 +616,59 @@ void quit(int code) {
    ----------------------------------------------------------------------- */
 
 void dispatcher(void) {
+   console("dispatcher(): started.\n");
    check_mode();
    disableInterrupts();
 
-   proc_ptr next_process;
+   proc_ptr next_process = NULL;
+   proc_ptr temp_process = NULL;
 
    if (Current->status == RUNNING) {
      Current->status = READY;
      removeRL(Current);
-     insertRL(Current);
-   }
-   //check quantum and compare to MAXTIME
-   if (next_process != NULL) {
-     if (Current->priority > next_process->priority) {
-       insertRL(Current);
-       p1_switch(Current->pid, next_process->pid);
-       context_switch(&Current->state, &next_process->state);
+     for (int i=0; i<SENTINELPRIORITY-1; i++) {
+        temp_process = get_highest_priority(i);
+        if (next_process == NULL) {
+          next_process = temp_process;
+        }
+        else {
+          if (next_process->priority > temp_process->priority) {
+            next_process = temp_process;
+          }
+          else continue;
+        }
      }
+   }
+
+
+   //as long as current process is running, it will fetch a process with
+   //higher priority, swap it with current process, reset the time related
+   //attributes
+  if (next_process != NULL) {
+    console("dispatcher(): found a suitable process for replacement\n");
+
+    proc_ptr old_process = Current;
+    insertRL(old_process);
+    Current = next_process;
+    Current->status = RUNNING;
+
+    if (old_process != Current) {
+      if (old_process->pid > -1) {
+        old_process->cpu_time += readtime();
+      }
+      Current->cpu_time = 0;
+      Current->start_time = get_current_time();
+    }
+
+    p1_switch(old_process->pid, Current->pid);
+    enableInterrupts();
+    context_switch(&old_process->state, Current->state);
   }
 
-  enableInterrupts();
+  else {
+    enableInterrupts();
+    console("dispatcher(): current process is not running..\n");
+  }
 } /* dispatcher */
 
 
@@ -661,11 +702,11 @@ static void check_deadlock() {
   int rdy = 0;
   for (int i=0; i<SENTINELPRIORITY-1; i++) {
     if (ProcTable[i].status == READY) {
-      blockd = 1;
+      rdy = 1;
       break;
     }
     else if (ProcTable[i].status = BLOCKED) {
-      rdy = 1;
+      blockd = 1;
       break;
     }
     else continue;
