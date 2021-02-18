@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/16/2021 9:30PM.
+   Last Edit: 2/17/2021 6:00PM.
 
    phase1.c
 
@@ -9,7 +9,7 @@
    TO-DO: debug and fix what hasn't been accounted for, dump_processes()
 
    CHANGES:
-   -fixed zap(), fixed quit(), implemented removeZL()
+   -fixed any errors during compiling. just need to debug further
 
 
    ------------------------------------------------------------------------ */
@@ -33,6 +33,7 @@ extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 extern void dump_processes(void);
 void dispatcher(void);
 void launch();
+void clock_handler(int dev, void * unit);
 static void enableInterrupts();
 static void check_deadlock();
 
@@ -65,6 +66,64 @@ unsigned int next_pid = SENTINELPID;
    Side Effects - lots, starts the whole thing
    ----------------------------------------------------------------------- */
 void (*int_vec[NUM_INTS])(int dev, void * unit);
+
+/*
+ * check if process is in kernel mode and halt if it isnt
+ */
+
+void check_mode(void) {
+  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
+    console("Kernel Error: Not in kernel mode.\n");
+    halt(1);
+  }
+}
+
+
+/*
+ * Enables the interrupts.
+ */
+void enableInterrupts() {
+  //if we're not in kernel mode then halt
+  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
+    console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
+    halt(1);
+  }
+  //if we are in kernel mode, then we can change bits
+  else psr_set(psr_get() | PSR_CURRENT_INT);
+}
+/* enableInterrupts */
+
+
+/*
+ * Disables the interrupts.
+ */
+void disableInterrupts() {
+  /* turn the interrupts OFF iff we are in kernel mode */
+  if((PSR_CURRENT_MODE & psr_get()) == 0) {
+    //not in kernel mode
+    console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
+    halt(1);
+  }
+  else psr_set( psr_get() & ~PSR_CURRENT_INT );
+
+  return;
+}
+/* disableInterrupts */
+
+
+/* clock_handler()
+ * Don't need to invoke this function. USLOSS invokes this
+ * every 20 milliseconds (see USLOSS manual). After 4 approx. intervals it will
+ * reach the MAXTIME we have set. time_slice() checks this
+ */
+void clock_handler(int dev, void * unit){
+  static int interval = 0;
+  interval++;
+  if (DEBUG && debugflag) {
+    console("clock_handler called. interval #%d\n", interval);
+  }
+  time_slice();
+}
 
 void init_process(int index) {
     check_mode();
@@ -215,33 +274,9 @@ int read_cur_start_time(void) {
 /* --------- */
 
 
-/* rough implementaion for function used in phase2 */
-int block_me(int new_status) {
-  if (new_status <= 10) {
-    console("block_me(): new_status is less than 10 (val: %d)\n", new_status);
-    halt(1);
-  }
-  if (Current->zapped) return -1;
-  return 0;
-}
-
-/* clock_handler()
- * Don't need to invoke this function. USLOSS invokes this
- * every 20 milliseconds (see USLOSS manual). After 4 approx. intervals it will
- * reach the MAXTIME we have set. time_slice() checks this
- */
-void clock_handler(int dev, void * unit){
-  static int interval = 0;
-  interval++;
-  if (DEBUG && debugflag) {
-    console("clock_handler called. interval #%d\n", interval);
-  }
-  time_slice();
-}
-
 void removeRL(proc_ptr proc) {
   if (ReadyList[0].priority == -1) {
-    console("removeRL(): ReadyList is empty.\n")
+    console("removeRL(): ReadyList is empty.\n");
     halt(1);
   }
   proc_ptr walker = &ReadyList[0];
@@ -262,7 +297,7 @@ void insertRL(proc_ptr proc) {
   walker = &ReadyList[0];
   if (proc->time_sliced) {
     while(walker->next_proc_ptr != NULL) {
-      walker->next_proc_ptr;
+      walker = walker->next_proc_ptr;
     }
     proc->time_sliced = 0;
     walker->next_proc_ptr = proc;
@@ -275,8 +310,8 @@ void insertRL(proc_ptr proc) {
 
     if (previous == NULL) {
       /*process goes at front of ReadyList */
-      proc->next_proc_ptr = ReadyList;
-      ReadyList = proc;
+      proc->next_proc_ptr = &ReadyList[0];
+      ReadyList[0] = *proc;
     }
     else {
       /*process goes after previous */
@@ -295,14 +330,20 @@ int block_me(int new_status) {
     console("block_me(): new_status must be larger than ten. val: %d\n", new_status);
     halt(1);
   }
+
+  if (Current->zapped) return -1;
+
   check_mode();
   disableInterrupts();
 
+  //may have to get rid of three lines below and just call dispatcher()
+  //but I need to use new_status in some way not sure how right now..
   Current->status = new_status;
-  removeRL(ReadyList[(Current->priority - 1)]);
+  removeRL(Current);
+  Current = &ReadyList[0];
   dispatcher();
 
-  if (Current->zappd) return -1;
+  enableInterrupts();
 
   return 0;
 }
@@ -406,7 +447,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
    //NOTE: added 2/9. **current should be swapped when its status changes
    if (Current->pid > -1) {
      insertChild(&ProcTable[proc_slot]);
-     ProcTable[proc_slot].parent = Current;
+     ProcTable[proc_slot].parent_ptr = Current;
    }
 
    insertRL(&ProcTable[proc_slot]);
@@ -465,25 +506,28 @@ int zap(int pid) {
     halt(1);
   }
 
-  proc_ptr zap_parent = get_proc(pid);
+  proc_ptr zap_this = get_proc(pid);
 
+  //want to make sure that the process exists at least
   if (zap_this == NULL) {
       console("zap(): process (pid: %d) does not exist\n", pid);
       halt(1);
   }
+  //if all children have already quit and process we wanna zap has quit then return 0
   else if (zap_this->status == QUIT) {
     if (Current->zapped) return -1;
     else return 0;
   }
 
+  //now we just insert our zapped process into Current's zapped process queue
+  //and mark Current as blocked.
   insertZL(zap_this);
-  Current=>status = BLOCKED;
+  Current->status = BLOCKED;
   removeRL(Current);
   dispatcher();
 
   enableInterrupts();
 
-  if (Current->zapped) return -1;
   return 0;
 
 }
@@ -557,17 +601,21 @@ int join(int * code) {
     curr_child = curr_child->next_sibling_ptr;
   }
 
+  //if they're all dead then block Current process and call dispatcher
   if (all_dead) {
     if (DEBUG && debugflag) console("join(): all children dead. removing from ReadyList and blocking\n");
     Current->status = BLOCKED;
     removeRL(Current);
     dispatcher();
   }
+
+  //otherwise we will resume and assign 'code' the status of Current's first child
   else if (earliest_child != NULL) {
-    *status = earliest_child->status;
+    *code = earliest_child->status;
   }
 
   enableInterrupts();
+
   return earliest_child->pid;
 }
 
@@ -584,7 +632,7 @@ int join(int * code) {
 void quit(int code) {
   if (DEBUG && debugflag) console("quit(): started\n");
   check_mode();
-  disable_interrupts();
+  disableInterrupts();
 
   Current->status = QUIT;
   removeRL(Current);
@@ -604,7 +652,7 @@ void quit(int code) {
 
   //free memory allocated to Current's stack and wipe attributes
   free(Current->stack);
-  this_pid = Current->pid % MAXPROC;
+  int this_pid = Current->pid % MAXPROC;
   init_process(this_pid);
 
   p1_quit(Current->pid);
@@ -616,7 +664,7 @@ void quit(int code) {
 
 /* helper function for dispatcher(). grabs procs with highest priority value */
 proc_ptr get_highest_priority(int ProcTable_index) {
-  console("get_highest_priority(): finding process with highest priority\n")
+  console("get_highest_priority(): finding process with highest priority\n");
   proc_ptr return_this = NULL;
   for (int i=0; i<SENTINELPRIORITY; i++) {
     if (return_this == NULL) {
@@ -629,7 +677,7 @@ proc_ptr get_highest_priority(int ProcTable_index) {
   }
 
   if (return_this != NULL) {
-    console("get_highest_priority(): found process\n")
+    console("get_highest_priority(): found process\n");
     return return_this;
   }
 
@@ -697,7 +745,7 @@ void dispatcher(void) {
 
     p1_switch(old_process->pid, Current->pid);
     enableInterrupts();
-    context_switch(&old_process->state, Current->state);
+    context_switch(&old_process->state, &Current->state);
   }
 
   else {
@@ -740,7 +788,7 @@ static void check_deadlock() {
       rdy = 1;
       break;
     }
-    else if (ProcTable[i].status = BLOCKED) {
+    else if (ProcTable[i].status == BLOCKED) {
       blockd = 1;
       break;
     }
@@ -748,50 +796,11 @@ static void check_deadlock() {
   }
 
   if (blockd) return;
-  else if (ready) {
-    console("check_deadlock(): only sentinel should be left.\n")
+  else if (rdy) {
+    console("check_deadlock(): only sentinel should be left.\n");
     halt(1);
   }
   else halt(0);
-}
-
-
-static void enableInterrupts() {
-  //if we're not in kernel mode then halt
-  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
-    console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
-    halt(1);
-  }
-  //if we are in kernel mode, then we can change bits
-  else psr_set(psr_get() | PSR_CURRENT_INT);
-}
-
-/*
- * Disables the interrupts.
- */
-void disableInterrupts() {
-  /* turn the interrupts OFF iff we are in kernel mode */
-  if((PSR_CURRENT_MODE & psr_get()) == 0) {
-    //not in kernel mode
-    console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
-    halt(1);
-  }
-  else psr_set( psr_get() & ~PSR_CURRENT_INT );
-
-  return;
-}
-/* disableInterrupts */
-
-
-/*
- * check if process is in kernel mode and halt if it isnt
- */
-
-void check_mode(void) {
-  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
-    console("Kernel Error: Not in kernel mode.\n");
-    halt(1);
-  }
 }
 
 
