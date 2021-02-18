@@ -72,6 +72,7 @@ void (*int_vec[NUM_INTS])(int dev, void * unit);
  */
 
 void check_mode(void) {
+  if (DEBUG && debugflag) console("check_mode(): called.\n");
   if ((PSR_CURRENT_MODE & psr_get()) == 0) {
     console("Kernel Error: Not in kernel mode.\n");
     halt(1);
@@ -144,7 +145,111 @@ void init_process(int index) {
     enableInterrupts();
 }
 
+/* ------------------------------------------------------------------------
+   Name - fork1
+   Purpose - Gets a new process from the process table and initializes
+             information of the process.  Updates information in the
+             parent process to reflect this child process creation.
+   Parameters - the process procedure address, the size of the stack and
+                the priority to be assigned to the child process.
+   Returns - the process id of the created child or -1 if no child could
+             be created or if priority is not between max and min priority.
+   Side Effects - ReadyList is changed, ProcTable is changed, Current
+                  process information changed
+   ------------------------------------------------------------------------ */
+int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
+{
+   check_mode();
+   disableInterrupts();
+   int proc_slot;
+
+   if (DEBUG && debugflag)
+      console("fork1(): creating process %s\n", name);
+
+   /* test if in kernel mode; halt if in user mode */
+   if((PSR_CURRENT_MODE & psr_get()) == 0) {
+     console("Kernel Error: Not in kernel mode.\n");
+     halt(1);
+   }
+   /* Return if stack size is too small */
+   if (stacksize < USLOSS_MIN_STACK) {
+     console("stacksize is too small.\n");
+     halt(1);
+   }
+
+
+   /* Check for valid priority (ADDED) */
+   else if ((priority > MINPRIORITY || priority < MAXPRIORITY) && f != sentinel) {
+     	 console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
+	 //console("invalid priority given.\n");
+     halt(1);
+   }
+
+   /* find an empty slot in the process table */
+   proc_slot = next_pid % MAXPROC;
+   for(int i=0; i<MAXPROC; i++) {
+     if (ProcTable[proc_slot].priority == -1) break;
+     next_pid++;
+     proc_slot = next_pid % MAXPROC;
+   }
+
+   /* fill-in entry in process table */
+   if ( strlen(name) >= (MAXNAME - 1) ) {
+      console("fork1(): Process name is too long.  Halting...\n");
+      halt(1);
+   }
+   strcpy(ProcTable[proc_slot].name, name);
+   ProcTable[proc_slot].start_func = f;
+   if ( arg == NULL )
+      ProcTable[proc_slot].start_arg[0] = '\0';
+   else if ( strlen(arg) >= (MAXARG - 1) ) {
+      console("fork1(): argument too long.  Halting...\n");
+      halt(1);
+   }
+   else
+      strcpy(ProcTable[proc_slot].start_arg, arg);
+
+    ProcTable[proc_slot].pid = next_pid++;
+
+    ProcTable[proc_slot].start_time = (int) get_current_time(); //NOTE: added this
+
+   /* Initialize context for this process, but use launch function pointer for
+    * the initial value of the process's program counter (PC)
+    */
+
+   ProcTable[proc_slot].stack = (char *) malloc(stacksize);
+   ProcTable[proc_slot].stacksize = stacksize;
+
+   context_init(&(ProcTable[proc_slot].state), psr_get(),
+                ProcTable[proc_slot].stack,
+                ProcTable[proc_slot].stacksize, launch);
+
+   /* for future phase(s) */
+   p1_fork(ProcTable[proc_slot].pid);
+
+   //NOTE: added 2/9. **current should be swapped when its status changes
+   if (Current->pid > -1) {
+     insertChild(&ProcTable[proc_slot]);
+     ProcTable[proc_slot].parent_ptr = Current;
+   }
+
+   insertRL(&ProcTable[proc_slot]);
+   ProcTable[proc_slot].status = READY;
+
+   if (f != sentinel) {
+     dispatcher();
+   }
+
+   enableInterrupts();
+   return ProcTable[proc_slot].pid;
+}
+
+/* startup()
+ *
+ * No need to invoke this as USLOSS will do that for us. Equivalent of main()
+ */
 void startup() {
+   if (DEBUG && debugflag) console("startup(): called.\n");
    check_mode();
 
    int i;      /* loop index */
@@ -158,8 +263,8 @@ void startup() {
    Current =  &ProcTable[MAXPROC-1];
 
    /* Initialize the Ready list, etc. */
-   if (DEBUG && debugflag)
-      console("startup(): initializing the Ready & Blocked lists\n");
+   //if (DEBUG && debugflag)
+   //  console("startup(): initializing the Ready & Blocked lists\n");
 
    /* Initialize the clock interrupt handler */
    int_vec[CLOCK_DEV] = clock_handler;
@@ -362,103 +467,6 @@ int unblock_proc(int pid){
     return 0;
   }
   else return -2;
-}
-/* ------------------------------------------------------------------------
-   Name - fork1
-   Purpose - Gets a new process from the process table and initializes
-             information of the process.  Updates information in the
-             parent process to reflect this child process creation.
-   Parameters - the process procedure address, the size of the stack and
-                the priority to be assigned to the child process.
-   Returns - the process id of the created child or -1 if no child could
-             be created or if priority is not between max and min priority.
-   Side Effects - ReadyList is changed, ProcTable is changed, Current
-                  process information changed
-   ------------------------------------------------------------------------ */
-int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority)
-{
-   check_mode();
-   disableInterrupts();
-   int proc_slot;
-
-   if (DEBUG && debugflag)
-      console("fork1(): creating process %s\n", name);
-
-   /* test if in kernel mode; halt if in user mode */
-   if((PSR_CURRENT_MODE & psr_get()) == 0) {
-     console("Kernel Error: Not in kernel mode.\n");
-     halt(1);
-   }
-   /* Return if stack size is too small */
-   if (stacksize < USLOSS_MIN_STACK) {
-     console("stacksize is too small.\n");
-     halt(1);
-   }
-
-
-   /* Check for valid priority (ADDED) */
-   else if ((priority > MINPRIORITY || priority < MAXPRIORITY) && f != sentinel) {
-     	 console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
-	 //console("invalid priority given.\n");
-     halt(1);
-   }
-
-   /* find an empty slot in the process table */
-   proc_slot = next_pid % MAXPROC;
-   while (ProcTable[proc_slot].priority != -1) {
-     next_pid++;
-     proc_slot = next_pid % MAXPROC;
-   }
-
-   /* fill-in entry in process table */
-   if ( strlen(name) >= (MAXNAME - 1) ) {
-      console("fork1(): Process name is too long.  Halting...\n");
-      halt(1);
-   }
-   strcpy(ProcTable[proc_slot].name, name);
-   ProcTable[proc_slot].start_func = f;
-   if ( arg == NULL )
-      ProcTable[proc_slot].start_arg[0] = '\0';
-   else if ( strlen(arg) >= (MAXARG - 1) ) {
-      console("fork1(): argument too long.  Halting...\n");
-      halt(1);
-   }
-   else
-      strcpy(ProcTable[proc_slot].start_arg, arg);
-
-    ProcTable[proc_slot].pid = next_pid++;
-
-    ProcTable[proc_slot].start_time = (int) get_current_time(); //NOTE: added this
-
-   /* Initialize context for this process, but use launch function pointer for
-    * the initial value of the process's program counter (PC)
-    */
-
-   ProcTable[proc_slot].stack = (char *) malloc(stacksize);
-   ProcTable[proc_slot].stacksize = stacksize;
-
-   context_init(&(ProcTable[proc_slot].state), psr_get(),
-                ProcTable[proc_slot].stack,
-                ProcTable[proc_slot].stacksize, launch);
-
-   /* for future phase(s) */
-   p1_fork(ProcTable[proc_slot].pid);
-
-   //NOTE: added 2/9. **current should be swapped when its status changes
-   if (Current->pid > -1) {
-     insertChild(&ProcTable[proc_slot]);
-     ProcTable[proc_slot].parent_ptr = Current;
-   }
-
-   insertRL(&ProcTable[proc_slot]);
-   ProcTable[proc_slot].status = READY;
-
-   if (f != sentinel) {
-     dispatcher();
-   }
-
-   enableInterrupts();
-   return ProcTable[proc_slot].pid;
 }
 
 //unblockes all zapped processes in current
@@ -781,8 +789,11 @@ int sentinel (char * dummy) {
  * This just checks to see if there are still running processes
  */
 static void check_deadlock() {
+  if (DEBUG && debugflag) console("check_deadlock(): called.\n");
+
   int blockd = 0;
   int rdy = 0;
+
   for (int i=0; i<SENTINELPRIORITY-1; i++) {
     if (ProcTable[i].status == READY) {
       rdy = 1;
