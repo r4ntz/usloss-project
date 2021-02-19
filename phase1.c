@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/18/2021 5:30PM.
+   Last Edit: 2/18/2021 8:20PM.
 
    phase1.c
 
@@ -72,7 +72,6 @@ void (*int_vec[NUM_INTS])(int dev, void * unit);
  */
 
 void check_mode(void) {
-  if (DEBUG && debugflag) console("check_mode(): called.\n");
   if ((PSR_CURRENT_MODE & psr_get()) == 0) {
     console("Kernel Error: Not in kernel mode.\n");
     halt(1);
@@ -269,6 +268,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
      next_pid++;
      proc_slot = next_pid % MAXPROC;
    }
+   if (DEBUG && debugflag)
+    console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot);
    //if there are no slots ready then return -1
    if (!found_slot) return -1;
 
@@ -313,6 +314,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    }
 
    //insert Readylist and mark as READY
+   console("reached here 1\n");
    insertRL(&ProcTable[proc_slot]);
    ProcTable[proc_slot].status = READY;
 
@@ -472,7 +474,7 @@ int block_me(int new_status) {
   //but I need to use new_status in some way not sure how right now..
   Current->status = new_status;
   removeRL(Current);
-  Current = ReadyList;
+
   dispatcher();
 
   enableInterrupts();
@@ -558,21 +560,22 @@ int zap(int pid) {
 void launch() {
   check_mode();
   disableInterrupts();
-   int result;
+  int result;
 
-   if (DEBUG && debugflag)
-      console("launch(): started\n");
+  if (DEBUG && debugflag) {
+    console("launch(): started\n");
+    console("launch(): calling function %s()\n", Current->name);
+  }
+  /* Enable interrupts */
+  //enableInterrupts(); not sure why that was put here initially
 
-   /* Enable interrupts */
-   enableInterrupts();
+  /* Call the function passed to fork1, and capture its return value */
+  result = Current->start_func(Current->start_arg);
 
-   /* Call the function passed to fork1, and capture its return value */
-   result = Current->start_func(Current->start_arg);
+  if (DEBUG && debugflag)
+    console("Process %d returned to launch\n", Current->pid);
 
-   if (DEBUG && debugflag)
-      console("Process %d returned to launch\n", Current->pid);
-
-   quit(result);
+  quit(result);
 
 } /* launch */
 
