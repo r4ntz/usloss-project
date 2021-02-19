@@ -1,10 +1,11 @@
-#define DEBUG 0
+#define DEBUG 1
 
 #define NOT_STARTED -1
 #define QUIT 0
 #define BLOCKED 1
 #define READY 2
 #define RUNNING 3
+#define ZOMBIE 4
 
 typedef struct proc_struct proc_struct;
 
@@ -30,7 +31,7 @@ struct proc_struct {
    int            start_time;
    int            cpu_time;
    int            time_sliced;
-   int            *exit_code; /*NOTE: based on int pointer 'code' in join() */
+   int            child_status;
    proc_ptr       parent_ptr;
    int            num_children;
 };
