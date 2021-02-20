@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/18/2021 8:20PM.
+   Last Edit: 2/19/2021 5:11PM.
 
    phase1.c
 
@@ -9,7 +9,7 @@
    TO-DO: debug and fix what hasn't been accounted for, dump_processes()
 
    CHANGES:
-   -rewrote it again and debugged. seem to be getting somewhere finally
+   -fixed insertRL now we're getting somewhere
 
 
    ------------------------------------------------------------------------ */
@@ -188,30 +188,45 @@ void insertChild(proc_ptr child) {
 
 /* insertRL()
  * pretty self-explanatory
+ * -- just flipped two operators when they compare priority
  */
 void insertRL(proc_ptr proc) {
-  if(DEBUG && debugflag) console("insertRL(): started.\n");
-  if (ReadyList == NULL) ReadyList = proc;
+  if(DEBUG && debugflag) console("insertRL(): started. inserting %s() priority: %d\n", proc->name, proc->priority);
+  if (ReadyList == NULL) {
+    ReadyList = proc;
+    return;
+  }
+
+  if(DEBUG && debugflag) {
+    console("insertRL(): comparing proc: %s() priority: %d,", proc->name, proc->priority);
+    console("\tReadyList: %s(), priority: %d\n", ReadyList->name, ReadyList->priority);
+  }
 
   //check if we can insert at front of queue
-  else if (proc->priority < ReadyList->priority) {
-    if(DEBUG && debugflag) console("insertRL(): inserting process pid:%d at front of RL\n", proc->pid);
+  if (proc->priority < ReadyList->priority) {
+    if(DEBUG && debugflag) console("insertRL(): inserting process pid:%d at front of RL - ", proc->pid);
     proc->next_proc_ptr = ReadyList;
     ReadyList = proc;
+    if(DEBUG && debugflag) console("new head: %s() which should == %s\n", ReadyList->name, proc->name);
   }
-  //otherwise we need to find where to insert proc
+  //check to see if we can insert anywhere thats not the tail
   else {
-    if(DEBUG && debugflag) console("insertRL(): inserting process pid: %d into RL.\n", proc->pid);
-    proc_ptr walker, prev;
-    walker = ReadyList;
-    while (walker != NULL) {
-      if (walker->priority > proc->priority) {
-        prev->next_proc_ptr = proc;
-        proc->next_proc_ptr = walker;
-        break;
+    proc_ptr walker = ReadyList;
+    while (walker->next_proc_ptr != NULL) {
+      if (walker->priority < proc->priority && walker->next_proc_ptr->priority >= proc->priority) {
+        if(DEBUG && debugflag)
+          console("insertRL(): inserting process %s() into RL.\n", proc->name);
+        proc_ptr temp = walker->next_proc_ptr;
+        walker->next_proc_ptr = proc;
+        proc->next_proc_ptr = temp;
+        return;
       }
-      prev = walker;
       walker = walker->next_proc_ptr;
+    }
+    //if you're here then it needs to go at the tail
+    if (walker->next_proc_ptr == NULL) {
+      if(DEBUG && debugflag) console("insertRL(): inserting process %s() at tail\n", proc->name);
+      walker->next_proc_ptr = proc;
     }
   }
 }
@@ -232,7 +247,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    check_mode();
    disableInterrupts();
 
-   int proc_slot;
+   int proc_slot = -1;
 
    if (DEBUG && debugflag) {
       console("fork1(): creating process %s\n", name);
@@ -249,56 +264,63 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    }
 
 
-   /* Check for valid priority (ADDED) */
-   else if ((priority > MINPRIORITY || priority < MAXPRIORITY) && f != sentinel) {
-     if (DEBUG && debugflag)
-      console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
-     halt(1);
-   }
+   /* find an empty slot in the table */
+    if (ProcTable[1].status == NOT_STARTED) {
+      if (DEBUG && debugflag) console("fork1(): sentinel needs to be started.\n");
+      proc_slot = 1;
+    }
+    else {
+      for (int i = next_pid; i < (next_pid + MAXPROC); i++) {
+        if (ProcTable[i%MAXPROC].status == NOT_STARTED) {
+          proc_slot = i%MAXPROC;
+          break;
+        }
+        next_pid++;
+      }
+    }
+    //----
+    if (DEBUG && debugflag)
+      console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot);
+    //if there are no slots ready then return -1
+    if (proc_slot == -1) return -1;
 
-
-   /* find an empty slot in the process table */
-   proc_slot = next_pid % MAXPROC;
-   int found_slot = 0;
-   for(int i=0; i<MAXPROC; i++) {
-     if (ProcTable[proc_slot].status == NOT_STARTED) {
-       found_slot = 1;
-       break;
-     }
-     next_pid++;
-     proc_slot = next_pid % MAXPROC;
-   }
-   if (DEBUG && debugflag)
-    console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot);
-   //if there are no slots ready then return -1
-   if (!found_slot) return -1;
-
-   /* fill-in entry in process table */
-   if ( strlen(name) >= (MAXNAME - 1) ) {
+    /* fill-in entry in process table */
+    //name, start_func, arg
+    if ( strlen(name) >= (MAXNAME - 1) ) {
       console("fork1(): Process name is too long.  Halting...\n");
       halt(1);
-   }
-   strcpy(ProcTable[proc_slot].name, name);
-   ProcTable[proc_slot].start_func = f;
-   if ( arg == NULL )
+    }
+    strcpy(ProcTable[proc_slot].name, name);
+    ProcTable[proc_slot].start_func = f;
+    if ( arg == NULL )
       ProcTable[proc_slot].start_arg[0] = '\0';
-   else if ( strlen(arg) >= (MAXARG - 1) ) {
+    else if ( strlen(arg) >= (MAXARG - 1) ) {
       console("fork1(): argument too long.  Halting...\n");
       halt(1);
-   }
-   else
-      strcpy(ProcTable[proc_slot].start_arg, arg);
+    }
+    else strcpy(ProcTable[proc_slot].start_arg, arg);
 
+    //priority
+    if ((priority < MAXPRIORITY || priority > MINPRIORITY) && f != sentinel) {
+      if (DEBUG && debugflag)
+       console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
+      halt(1);
+    }
+    else {
+      ProcTable[proc_slot].priority = priority;
+    }
+
+    //pid
     ProcTable[proc_slot].pid = ++next_pid;
 
+
+   //stack
+   ProcTable[proc_slot].stack = (char *) malloc(stacksize);
+   ProcTable[proc_slot].stacksize = stacksize;
 
    /* Initialize context for this process, but use launch function pointer for
     * the initial value of the process's program counter (PC)
     */
-
-   ProcTable[proc_slot].stack = (char *) malloc(stacksize);
-   ProcTable[proc_slot].stacksize = stacksize;
-
    context_init(&(ProcTable[proc_slot].state), psr_get(),
                 ProcTable[proc_slot].stack,
                 ProcTable[proc_slot].stacksize, launch);
@@ -314,7 +336,6 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    }
 
    //insert Readylist and mark as READY
-   console("reached here 1\n");
    insertRL(&ProcTable[proc_slot]);
    ProcTable[proc_slot].status = READY;
 
@@ -405,33 +426,6 @@ int readtime(void) {
   return cpu_time;
 }
 
-
-//checks to see if process has any time left for execution
-void time_slice(void) {
-  if (DEBUG && debugflag) console("time_slice(): started\n");
-  check_mode();
-  disableInterrupts();
-
-  int elapsed_time = readtime();
-  //this means that the time is up
-  if (MAXTIME - elapsed_time <= 0) {
-    Current->time_sliced++;
-  }
-  if (Current->time_sliced == 4) {
-    Current->time_sliced = 0;
-    dispatcher();
-  }
-  else enableInterrupts();
-}
-
-//just returns start_time attr which was assigned by get_current_time()
-int read_cur_start_time(void) {
-  return Current->start_time;
-}
-
-/* --------- */
-
-
 void removeRL(proc_ptr proc) {
   if (ReadyList == NULL) {
     console("removeRL(): ReadyList is empty.\n");
@@ -453,6 +447,34 @@ void removeRL(proc_ptr proc) {
   prev->next_proc_ptr = walker->next_proc_ptr;
   return;
 }
+
+//checks to see if process has any time left for execution
+void time_slice(void) {
+  if (DEBUG && debugflag) console("time_slice(): started\n");
+  check_mode();
+  disableInterrupts();
+
+  int elapsed_time = readtime();
+  //this means that the time is up
+  if (MAXTIME - elapsed_time <= 0) {
+    Current->time_sliced++;
+  }
+  if (Current->time_sliced == 4) {
+    Current->time_sliced = 0;
+    removeRL(Current);
+    insertRL(Current);
+    Current->status = READY;
+    dispatcher();
+  }
+  else enableInterrupts();
+}
+
+//just returns start_time attr which was assigned by get_current_time()
+int read_cur_start_time(void) {
+  return Current->start_time;
+}
+
+/* --------- */
 
 
 /* rough implementation for function used in phase2
@@ -565,6 +587,7 @@ void launch() {
   if (DEBUG && debugflag) {
     console("launch(): started\n");
     console("launch(): calling function %s()\n", Current->name);
+    console("start_arg: %s\n", Current->start_arg);
   }
   /* Enable interrupts */
   //enableInterrupts(); not sure why that was put here initially
@@ -771,7 +794,8 @@ void dispatcher(void) {
      }
    }
 
-   if (DEBUG && debugflag) console("dispatcher(): context switching.\n");
+   if (DEBUG && debugflag) console("dispatcher(): context switching - ");
+
 
    proc_ptr old_process;
 
@@ -780,6 +804,7 @@ void dispatcher(void) {
      Current = ReadyList;
      Current->start_time = get_current_time();
      Current->status = RUNNING;
+     if (DEBUG && debugflag) console("starting %s()\n", Current->name);
      context_switch(NULL, &Current->state);
    }
    else {
@@ -794,10 +819,11 @@ void dispatcher(void) {
        old_process->cpu_time = cpu_time;
      }
      else old_process->cpu_time = 0;
-   }
 
-   p1_switch(old_process->pid, Current->pid);
-   context_switch(&old_process->state, &Current->state);
+    p1_switch(old_process->pid, Current->pid);
+    if (DEBUG && debugflag) console("old: %s()\tnew: %s()\n", old_process->name, Current->name );
+    context_switch(&old_process->state, &Current->state);
+   }
 
 } /* dispatcher */
 
@@ -817,8 +843,8 @@ int sentinel (char * dummy) {
    if (DEBUG && debugflag)
       console("sentinel(): called\n");
    while (1) {
-      check_deadlock();
-      waitint();
+     check_deadlock();
+     waitint();
    }
    return 1;
 } /* sentinel */
@@ -833,8 +859,8 @@ static void check_deadlock() {
   int blockd = 0;
   int rdy = 0;
 
-  for (int i=0; i<SENTINELPRIORITY-1; i++) {
-    if (ProcTable[i].status == READY) {
+  for (int i=0; i<MAXPROC; i++) {
+    if (i >= 1 && ProcTable[i].status == READY) {
       rdy = 1;
       break;
     }
@@ -847,8 +873,11 @@ static void check_deadlock() {
 
   if (blockd) return;
   else if (rdy) {
-    console("check_deadlock(): only sentinel should be left.\n");
-    halt(1);
+    if (DEBUG && debugflag) {
+      console("curr proc:%s\tpid:%d\tstatus:%d\n", Current->name, Current->pid, Current->status);
+      console("check_deadlock(): only sentinel should be left.\n");
+      halt(1);
+    }
   }
   else halt(0);
 }
