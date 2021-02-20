@@ -1,12 +1,15 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/19/2021 5:11PM.
+   Last Edit: 2/19/2021 5:45PM.
 
    phase1.c
 
    CSCV 452
 
-   TO-DO: debug and fix what hasn't been accounted for, dump_processes()
+   TO-DO:
+   -got rid of enableInterrupts and disableInterrupts() calls and trying to figure
+   out why time_slice() wont stop being called
+   -debug and fix what hasn't been accounted for, dump_processes()
 
    CHANGES:
    -fixed insertRL now we're getting somewhere
@@ -130,7 +133,6 @@ proc_ptr get_proc(int pid) {
 
 void init_process(int index) {
     check_mode();
-    disableInterrupts();
 
     ProcTable[index].pid = -1;
     ProcTable[index].next_proc_ptr = NO_CURRENT_PROCESS;
@@ -144,7 +146,6 @@ void init_process(int index) {
     ProcTable[index].cpu_time = 0;
     ProcTable[index].start_time = 0;
 
-    enableInterrupts();
 }
 
 void clear_process(int index) {
@@ -245,7 +246,6 @@ void insertRL(proc_ptr proc) {
    ------------------------------------------------------------------------ */
 int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) {
    check_mode();
-   disableInterrupts();
 
    int proc_slot = -1;
 
@@ -344,7 +344,6 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
      dispatcher();
    }
 
-   enableInterrupts();
    return ProcTable[proc_slot].pid;
 }
 
@@ -370,6 +369,7 @@ void startup() {
 
    /* Initialize the clock interrupt handler */
    int_vec[CLOCK_DEV] = clock_handler;
+   enableInterrupts();
 
    /* startup a sentinel process */
    if (DEBUG && debugflag)
@@ -452,7 +452,6 @@ void removeRL(proc_ptr proc) {
 void time_slice(void) {
   if (DEBUG && debugflag) console("time_slice(): started\n");
   check_mode();
-  disableInterrupts();
 
   int elapsed_time = readtime();
   //this means that the time is up
@@ -466,7 +465,6 @@ void time_slice(void) {
     Current->status = READY;
     dispatcher();
   }
-  else enableInterrupts();
 }
 
 //just returns start_time attr which was assigned by get_current_time()
@@ -490,7 +488,6 @@ int block_me(int new_status) {
   if (Current->zapped) return -1;
 
   check_mode();
-  disableInterrupts();
 
   //may have to get rid of three lines below and just call dispatcher()
   //but I need to use new_status in some way not sure how right now..
@@ -498,8 +495,6 @@ int block_me(int new_status) {
   removeRL(Current);
 
   dispatcher();
-
-  enableInterrupts();
 
   return 0;
 }
@@ -531,7 +526,6 @@ int unblock_proc(int pid){
 int zap(int pid) {
   if (DEBUG && debugflag) console("zap(): starting\n");
   check_mode();
-  disableInterrupts();
 
   //Current can't be zapped
   if (Current->pid == pid) {
@@ -565,8 +559,6 @@ int zap(int pid) {
     return -1;
   }
 
-  enableInterrupts();
-
   return 0;
 
 }
@@ -581,7 +573,6 @@ int zap(int pid) {
    ------------------------------------------------------------------------ */
 void launch() {
   check_mode();
-  disableInterrupts();
   int result;
 
   if (DEBUG && debugflag) {
@@ -617,19 +608,16 @@ void launch() {
    ------------------------------------------------------------------------ */
 int join(int * code) {
   check_mode();
-  disableInterrupts();
 
   if (DEBUG && debugflag) console("join(): started\n");
 
   //if there's no children then return -2
   if (Current->num_children == 0) {
     if (DEBUG && debugflag) console("join(): no children!\n");
-    enableInterrupts();
     return -2;
   }
   //check to see if process was zapped in the join
   if(is_zapped()) {
-    enableInterrupts();
     return -1;
   }
   //check to see if children quit
@@ -650,7 +638,6 @@ int join(int * code) {
       Current->child_proc_ptr = Current->child_proc_ptr->next_sibling_ptr;
     }
 
-    enableInterrupts();
     return curr_child->pid;
   }
 
@@ -661,17 +648,14 @@ int join(int * code) {
     removeRL(Current);
     dispatcher();
     if (is_zapped()) {
-      enableInterrupts();
       return -1;
     }
     *code = Current->child_proc_ptr->status;
 
-    enableInterrupts();
     return curr_child->pid;
   }
 
   //Current->numChildren--;
-  enableInterrupts();
   return -1;
 }
 
@@ -688,7 +672,6 @@ int join(int * code) {
 void quit(int code) {
   if (DEBUG && debugflag) console("quit(): started\n");
   check_mode();
-  disableInterrupts();
 
   proc_ptr walker_zappd, walker_child;
 
@@ -712,7 +695,6 @@ void quit(int code) {
       else if (Current->zapped) {
         walker_child = QUIT;
         Current->num_children--;
-        dispatcher();
       }
       walker_child = walker_child->next_sibling_ptr;
     }
@@ -781,7 +763,6 @@ void quit(int code) {
 void dispatcher(void) {
    if (DEBUG && debugflag) console("dispatcher(): started.\n");
    check_mode();
-   disableInterrupts();
 
    //clear any processes that have quit from proc table to make searching easier/more clean
    if (DEBUG && debugflag) console("dispatcher(): clearing processes that have quit.\n");
@@ -856,30 +837,14 @@ int sentinel (char * dummy) {
 static void check_deadlock() {
   if (DEBUG && debugflag) console("check_deadlock(): called.\n");
 
-  int blockd = 0;
-  int rdy = 0;
-
-  for (int i=0; i<MAXPROC; i++) {
-    if (i >= 1 && ProcTable[i].status == READY) {
-      rdy = 1;
-      break;
-    }
-    else if (ProcTable[i].status == BLOCKED) {
-      blockd = 1;
-      break;
-    }
-    else continue;
+  if (ReadyList->next_proc_ptr == NULL) {
+    if (DEBUG && debugflag) console("check_deadlock(): no processes remaining\n");
   }
-
-  if (blockd) return;
-  else if (rdy) {
-    if (DEBUG && debugflag) {
-      console("curr proc:%s\tpid:%d\tstatus:%d\n", Current->name, Current->pid, Current->status);
-      console("check_deadlock(): only sentinel should be left.\n");
-      halt(1);
-    }
+  else if (ReadyList->priority == SENTINELPRIORITY) {
+    if (DEBUG && debugflag)
+      console("check_deadlock(): there are processes still remaining\n");
+    halt(1);
   }
-  else halt(0);
 }
 
 
