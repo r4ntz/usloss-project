@@ -1,18 +1,17 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/19/2021 5:45PM.
+   Last Edit: 2/19/2021 7:20PM.
 
    phase1.c
 
    CSCV 452
 
    TO-DO:
-   -got rid of enableInterrupts and disableInterrupts() calls and trying to figure
-   out why time_slice() wont stop being called
+   -fix quit(), possibly clear_process() on sentinel. see output for more clues
    -debug and fix what hasn't been accounted for, dump_processes()
 
    CHANGES:
-   -fixed insertRL now we're getting somewhere
+   -fixed check_deadlock()
 
 
    ------------------------------------------------------------------------ */
@@ -57,6 +56,8 @@ proc_ptr Current;
 
 /* the next pid to be assigned */
 unsigned int next_pid = SENTINELPID;
+
+int available_processes = 0;
 
 
 /* -------------------------- Functions ----------------------------------- */
@@ -454,6 +455,7 @@ void time_slice(void) {
   check_mode();
 
   int elapsed_time = readtime();
+  console("elapsed time: %d\n", elapsed_time);
   //this means that the time is up
   if (MAXTIME - elapsed_time <= 0) {
     Current->time_sliced++;
@@ -587,7 +589,7 @@ void launch() {
   result = Current->start_func(Current->start_arg);
 
   if (DEBUG && debugflag)
-    console("Process %d returned to launch\n", Current->pid);
+    console("launch(): process %s() returned to launch, result: %d\n", Current->name, result);
 
   quit(result);
 
@@ -809,6 +811,7 @@ void dispatcher(void) {
 } /* dispatcher */
 
 
+
 /* ------------------------------------------------------------------------
    Name - sentinel
    Purpose - The purpose of the sentinel routine is two-fold.  One
@@ -821,13 +824,13 @@ void dispatcher(void) {
 		   and halt.
    ----------------------------------------------------------------------- */
 int sentinel (char * dummy) {
-   if (DEBUG && debugflag)
-      console("sentinel(): called\n");
-   while (1) {
-     check_deadlock();
-     waitint();
-   }
-   return 1;
+  if (DEBUG && debugflag) console("sentinel(): called\n");
+
+  while (available_processes) {
+    check_deadlock();
+    waitint();
+  }
+  return 1;
 } /* sentinel */
 
 
@@ -835,15 +838,21 @@ int sentinel (char * dummy) {
  * This just checks to see if there are still running processes
  */
 static void check_deadlock() {
-  if (DEBUG && debugflag) console("check_deadlock(): called.\n");
-
-  if (ReadyList->next_proc_ptr == NULL) {
-    if (DEBUG && debugflag) console("check_deadlock(): no processes remaining\n");
+  if (DEBUG && debugflag) console("check_deadlock(): called. process: %s\n", Current->name);
+  for (int i=1; i<MAXPROC; i++) {
+    if (ProcTable[i].status != QUIT) {
+      available_processes = 1;
+    }
   }
-  else if (ReadyList->priority == SENTINELPRIORITY) {
+
+  if (available_processes) {
+    if (DEBUG && debugflag) console("check_deadlock(): there are processes still remaining\n");
+    return halt(1);
+  }
+  else {
     if (DEBUG && debugflag)
-      console("check_deadlock(): there are processes still remaining\n");
-    halt(1);
+      console("check_deadlock(): sentinel is only process remaining\n");
+    halt(0);
   }
 }
 
