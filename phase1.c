@@ -1,17 +1,23 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/20/2021 9:13PM.
+   Last Edit: 2/21/2021 1:30AM.
 
    phase1.c
 
    CSCV 452
 
    TO-DO:
-   -fix quit(), possibly clear_process() on sentinel. see output for more clues
-   -debug and fix what hasn't been accounted for, dump_processes()
+   -possibly re-implement clear_process for end of quit()
+   -find out a way to handle zapblocked processes that contains a zapped process in ZappedList
+   -context_switch with other process that is now in ZappedList AFTER calling zap()
+   -do a check in the beginning of dispatcher for ZAPPEDBLOCK on Current
+   -Make zapped attr zero on zapped process when it quits so that zappedblock process can continue through dispatcher
+
 
    CHANGES:
-   -fixed check_deadlock()
+   -kernel.h: ZAPBLOCKED and JOINBLOCKED, rather than simple BLOCKED
+   -phase1.c: --clear_process(), ++ZappedList, checks for JOINBLOCKED
+   in dispatcher(), dispatcher now zapblocks current process if a child is still active (WIP)
 
 
    ------------------------------------------------------------------------ */
@@ -51,13 +57,13 @@ proc_struct ProcTable[MAXPROC];
 /* Process lists  */
 proc_ptr ReadyList;
 
+proc_ptr ZappedList;
+
 /* current process ID */
 proc_ptr Current;
 
 /* the next pid to be assigned */
 unsigned int next_pid = SENTINELPID;
-
-int available_processes = 0;
 
 
 /* -------------------------- Functions ----------------------------------- */
@@ -74,7 +80,7 @@ void (*int_vec[NUM_INTS])(int dev, void * unit);
 /*
  * check if process is in kernel mode and halt if it isnt
  */
- 
+
  void check_mode(void) {
   if ((PSR_CURRENT_MODE & psr_get()) == 0) {
     console("Kernel Error: Not in kernel mode.\n");
@@ -150,12 +156,6 @@ void init_process(int index) {
 
 }
 
-
-void clear_process(int index) {
-  if (DEBUG && debugflag) console("clear_process(): started\n");
-  init_process(index);
-}
-
 /* checks for zapped processes and returns 1 if so*/
 int is_zapped(void) {
   if (DEBUG && debugflag) console("is_zapped(): started.\n");
@@ -176,7 +176,6 @@ int get_current_time(void) {
  * process. add this in fork1() once child is filled w/attributes.
  */
 void insertChild(proc_ptr child) {
-  init_process(child->pid);
 
   proc_ptr walker = Current;
   if (walker->child_proc_ptr != NULL) {
@@ -282,16 +281,16 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
 	  next_pid++;
       }
     }
-	
+
     //----
     if (DEBUG && debugflag) {
 	console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot); }
-	
+
     /* if there are no slots ready then return -1 */
     if (proc_slot == -1) return -1;
 
     /* validate fill-in name, start_func, arg in process table */
-	
+
     /* Validate and set name*/
     if ( strlen(name) >= (MAXNAME - 1) ) {
       console("fork1(): Process name is too long.  Halting...\n");
@@ -301,7 +300,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
     strcpy(ProcTable[proc_slot].name, name);
     ProcTable[proc_slot].start_func = f;
     }
-	
+
 	/* validate argument len*/
 	if ( arg == NULL ) ProcTable[proc_slot].start_arg[0] = '\0';
 	else if ( strlen(arg) >= (MAXARG - 1) ) {
@@ -321,7 +320,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
     }
 
     /* set pid */
-    ProcTable[proc_slot].pid = ++next_pid;
+    ProcTable[proc_slot].pid = next_pid;
 
    /* generate stack */
    ProcTable[proc_slot].stack = (char *) malloc(stacksize);
@@ -353,7 +352,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
      dispatcher();
    }
 
-   return ProcTable[proc_slot].pid;
+   return next_pid++;
 }
 
 /* startup()
@@ -513,12 +512,12 @@ int unblock_proc(int pid){
   if (Current->pid == pid) {
     return -2;
   }
-  
+
   proc_ptr unblock_this = get_proc(pid);
 
   if (unblock_this != NULL) {
     if (unblock_this->status <= 10) return -2;
-    else if (unblock_this->status == BLOCKED) return -2;
+    else if (unblock_this->status == ZAPBLOCKED) return -2;
     else if (unblock_this->zapped) return -1;
 
     insertRL(unblock_this);
@@ -546,23 +545,23 @@ int zap(int pid) {
   }
 
   //add process associated with pid to zap queue
-  proc_ptr this_proc = get_proc(pid % MAXPROC);
-  this_proc->zapped = 1;
+  proc_ptr zap_this = get_proc(pid % MAXPROC)
+  zap_this->zapped = 1;
 
-  if (this_proc->next_zappd_ptr == NULL) {
-    this_proc->next_zappd_ptr = Current;
+  if (ZappedList == NULL) {
+    ZappedList = zap_this;
   }
   else {
-    proc_ptr walker = this_proc->next_zappd_ptr;
+    proc_ptr walker = ZappedList;
     while (walker->next_zappd_ptr != NULL) {
       walker = walker->next_zappd_ptr;
     }
-    walker->next_zappd_ptr = Current;
+    walker->next_zappd_ptr = zap_this;
   }
 
   //now we just insert our zapped process into Current's zapped process queue
   //and mark Current as blocked
-  Current->status = BLOCKED;
+  Current->status = ZAPBLOCKED;
   removeRL(Current);
   dispatcher();
 
@@ -656,7 +655,7 @@ int join(int * code) {
   //otherwise..
   else {
     if (DEBUG && debugflag) console("join(): unable to find a zombie child\n");
-    Current->status = BLOCKED;
+    Current->status = JOINBLOCKED;
     removeRL(Current);
     dispatcher();
     if (is_zapped()) {
@@ -687,6 +686,8 @@ void quit(int code) {
 
   proc_ptr walker_zappd, walker_child;
 
+  removeRL(Current);
+
   if (is_zapped()) {
     walker_zappd = Current->next_zappd_ptr;
     while (walker_zappd != NULL) {
@@ -716,7 +717,7 @@ void quit(int code) {
   if(Current->parent_ptr != NO_CURRENT_PROCESS) {
     int parent_pid = Current->parent_ptr->pid;
     //(1) check to see if parent is blocked
-    if (ProcTable[parent_pid].status == BLOCKED) {
+    if (ProcTable[parent_pid].status == JOINBLOCKED) {
       insertRL(&ProcTable[parent_pid]);
       ProcTable[parent_pid].status = READY;
       //we dont want to run second conditional more than once so lets check
@@ -752,7 +753,6 @@ void quit(int code) {
 
   Current->status = QUIT;
   p1_quit(Current->pid);
-  removeRL(Current);
   free(Current->stack);
 
   //this is so that the next process can run
@@ -777,17 +777,17 @@ void dispatcher(void) {
    check_mode();
 
    //clear any processes that have quit from proc table to make searching easier/more clean
-   if (DEBUG && debugflag) console("dispatcher(): clearing processes that have quit.\n");
-   for (int i=0; i<MAXPROC; i++) {
+   //if (DEBUG && debugflag) console("dispatcher(): clearing processes that have quit.\n");
+   //for (int i=1; i<MAXPROC; i++) {
      //found parent thats quit
-     if (ProcTable[i].status == QUIT) clear_process(i);
+     //if (ProcTable[i].status == QUIT) clear_process(i);
      //found child thats quit
-     else if (ProcTable[i].status == ZOMBIE) {
-      if(ProcTable[i].parent_ptr->pid == -1) clear_process(i);
-     }
-   }
+     //else if (ProcTable[i].status == ZOMBIE) {
+      //if(ProcTable[i].parent_ptr->pid == -1) clear_process(i);
+     //}
+   //}
 
-   if (DEBUG && debugflag) console("dispatcher(): context switching - ");
+   if (DEBUG && debugflag) console("dispatcher(): context switching.\n");
 
 
    proc_ptr old_process;
@@ -797,12 +797,18 @@ void dispatcher(void) {
      Current = ReadyList;
      Current->start_time = get_current_time();
      Current->status = RUNNING;
-     if (DEBUG && debugflag) console("starting %s()\n", Current->name);
+     if (DEBUG && debugflag) console("dispatcher(): starting %s()\n", Current->name);
      context_switch(NULL, &Current->state);
    }
    else {
      old_process = Current;
      Current = ReadyList;
+
+     //in case its trying to swap child for parent
+     if (old_process->parent_ptr == Current) {
+       zap(old_process->pid);
+     }
+
      Current->start_time = get_current_time();
      Current->status = RUNNING;
 
@@ -814,7 +820,7 @@ void dispatcher(void) {
      else old_process->cpu_time = 0;
 
     p1_switch(old_process->pid, Current->pid);
-    if (DEBUG && debugflag) console("old: %s()\tnew: %s()\n", old_process->name, Current->name );
+    if (DEBUG && debugflag) console("dispatcher(): old: %s()\tnew: %s()\n", old_process->name, Current->name );
     context_switch(&old_process->state, &Current->state);
    }
 
@@ -834,9 +840,10 @@ void dispatcher(void) {
 		   and halt.
    ----------------------------------------------------------------------- */
 int sentinel (char * dummy) {
+
   if (DEBUG && debugflag) console("sentinel(): called\n");
 
-  while (available_processes) {
+  while (1) {
     check_deadlock();
     waitint();
   }
@@ -848,6 +855,8 @@ int sentinel (char * dummy) {
  * This just checks to see if there are still running processes
  */
 static void check_deadlock() {
+  int available_processes = 0;
+
   if (DEBUG && debugflag) console("check_deadlock(): called. process: %s\n", Current->name);
   for (int i=1; i<MAXPROC; i++) {
     if (ProcTable[i].status != QUIT) {

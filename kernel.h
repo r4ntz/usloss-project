@@ -2,10 +2,11 @@
 
 #define NOT_STARTED -1
 #define QUIT 0
-#define BLOCKED 1
+#define ZAPBLOCKED 1
 #define READY 2
 #define RUNNING 3
 #define ZOMBIE 4
+#define JOINBLOCKED 5
 
 typedef struct proc_struct proc_struct;
 
@@ -37,11 +38,11 @@ struct proc_struct {
 };
 
 struct psr_bits {
-       unsigned int cur_mode:1;
+        unsigned int cur_mode:1;
        unsigned int cur_int_enable:1;
-       unsigned int prev_mode:1;
-       unsigned int prev_int_enable:1;
-	   unsigned int unused:28;
+        unsigned int prev_mode:1;
+        unsigned int prev_int_enable:1;
+    unsigned int unused:28;
 };
 
 union psr_values {
