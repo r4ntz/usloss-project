@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/19/2021 7:20PM.
+   Last Edit: 2/20/2021 9:13PM.
 
    phase1.c
 
@@ -74,8 +74,8 @@ void (*int_vec[NUM_INTS])(int dev, void * unit);
 /*
  * check if process is in kernel mode and halt if it isnt
  */
-
-void check_mode(void) {
+ 
+ void check_mode(void) {
   if ((PSR_CURRENT_MODE & psr_get()) == 0) {
     console("Kernel Error: Not in kernel mode.\n");
     halt(1);
@@ -132,6 +132,7 @@ proc_ptr get_proc(int pid) {
   else return walker;
 }
 
+/* initializes a new process */
 void init_process(int index) {
     check_mode();
 
@@ -149,11 +150,13 @@ void init_process(int index) {
 
 }
 
+
 void clear_process(int index) {
   if (DEBUG && debugflag) console("clear_process(): started\n");
   init_process(index);
 }
 
+/* checks for zapped processes and returns 1 if so*/
 int is_zapped(void) {
   if (DEBUG && debugflag) console("is_zapped(): started.\n");
   if (Current->zapped) return 1;
@@ -276,32 +279,38 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
           proc_slot = i%MAXPROC;
           break;
         }
-        next_pid++;
+	  next_pid++;
       }
     }
+	
     //----
-    if (DEBUG && debugflag)
-      console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot);
-    //if there are no slots ready then return -1
+    if (DEBUG && debugflag) {
+	console("fork1(): process '%s' is now associated with pid: %d\n", name, proc_slot); }
+	
+    /* if there are no slots ready then return -1 */
     if (proc_slot == -1) return -1;
 
-    /* fill-in entry in process table */
-    //name, start_func, arg
+    /* validate fill-in name, start_func, arg in process table */
+	
+    /* Validate and set name*/
     if ( strlen(name) >= (MAXNAME - 1) ) {
       console("fork1(): Process name is too long.  Halting...\n");
       halt(1);
     }
+	else {
     strcpy(ProcTable[proc_slot].name, name);
     ProcTable[proc_slot].start_func = f;
-    if ( arg == NULL )
-      ProcTable[proc_slot].start_arg[0] = '\0';
-    else if ( strlen(arg) >= (MAXARG - 1) ) {
+    }
+	
+	/* validate argument len*/
+	if ( arg == NULL ) ProcTable[proc_slot].start_arg[0] = '\0';
+	else if ( strlen(arg) >= (MAXARG - 1) ) {
       console("fork1(): argument too long.  Halting...\n");
       halt(1);
     }
     else strcpy(ProcTable[proc_slot].start_arg, arg);
 
-    //priority
+    /* validate priority */
     if ((priority < MAXPRIORITY || priority > MINPRIORITY) && f != sentinel) {
       if (DEBUG && debugflag)
        console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
@@ -311,11 +320,10 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       ProcTable[proc_slot].priority = priority;
     }
 
-    //pid
+    /* set pid */
     ProcTable[proc_slot].pid = ++next_pid;
 
-
-   //stack
+   /* generate stack */
    ProcTable[proc_slot].stack = (char *) malloc(stacksize);
    ProcTable[proc_slot].stacksize = stacksize;
 
@@ -330,7 +338,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    p1_fork(ProcTable[proc_slot].pid);
 
 
-   //determine whether to add process as a parent or child
+   /* determine to add process as parent or child */
    if (Current != NULL) {
      ProcTable[proc_slot].parent_ptr = Current;
      insertChild(&ProcTable[proc_slot]);
@@ -417,7 +425,7 @@ void finish() {
  * execution and duration a process has been running
  */
 
-//returns CPU time (in milleseconds) used by current process
+/* returns CPU time (in milleseconds) used by current process */
 int readtime(void) {
   int curr_time_since_boot = sys_clock();
   int curr_time = read_cur_start_time();
@@ -449,7 +457,7 @@ void removeRL(proc_ptr proc) {
   return;
 }
 
-//checks to see if process has any time left for execution
+/* checks to see if process has any time left for execution */
 void time_slice(void) {
   if (DEBUG && debugflag) console("time_slice(): started\n");
   check_mode();
@@ -500,10 +508,12 @@ int block_me(int new_status) {
 
   return 0;
 }
+
 int unblock_proc(int pid){
   if (Current->pid == pid) {
     return -2;
   }
+  
   proc_ptr unblock_this = get_proc(pid);
 
   if (unblock_this != NULL) {

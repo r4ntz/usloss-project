@@ -37,11 +37,11 @@ struct proc_struct {
 };
 
 struct psr_bits {
-        unsigned int cur_mode:1;
+       unsigned int cur_mode:1;
        unsigned int cur_int_enable:1;
-        unsigned int prev_mode:1;
-        unsigned int prev_int_enable:1;
-    unsigned int unused:28;
+       unsigned int prev_mode:1;
+       unsigned int prev_int_enable:1;
+	   unsigned int unused:28;
 };
 
 union psr_values {
