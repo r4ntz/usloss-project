@@ -545,7 +545,7 @@ int zap(int pid) {
   }
 
   //add process associated with pid to zap queue
-  proc_ptr zap_this = get_proc(pid % MAXPROC)
+  proc_ptr zap_this = get_proc(pid % MAXPROC);
   zap_this->zapped = 1;
 
   if (ZappedList == NULL) {
@@ -864,6 +864,8 @@ static void check_deadlock() {
     }
   }
 
+	dump_processes();
+
   if (available_processes) {
     if (DEBUG && debugflag) console("check_deadlock(): there are processes still remaining\n");
     return halt(1);
@@ -895,6 +897,35 @@ static void check_deadlock() {
    ----------------------------------------------------------------------- */
 
 void dump_processes(void) {
-	return;
+	
+    if (DEBUG && debugflag){
+		console("dump_processes(void): Outputting all proc info\n");
+	}
+	
+	
+	console(" --- PROCESS LIST START---\n");
+	//output running procs based on a valid PID
+	for (int i=1; ProcTable[i].pid>0; i++){
+		console("Name: %s\t",ProcTable[i].name);
+		console("PID: %d\t",ProcTable[i].pid);
+		console("PRI: %d\t",ProcTable[i].priority);
+			if(ProcTable[i].status = QUIT) {console("Status: QUIT\t");}
+			else if(ProcTable[i].status = ZAPBLOCKED) {console("Status: ZAPBLOCKED\t");}
+			else if(ProcTable[i].status = READY) {console("Status: READY\t");}
+			else if(ProcTable[i].status = RUNNING) {console("Status: RUNNING\t");}
+			else if(ProcTable[i].status = ZOMBIE) {console("Status: ZOMBIE\t");}
+			else if(ProcTable[i].status = JOINBLOCKED) {console("Status: JOINBLOCKED\t");}
+			else{(console("Status: INVALID STATUS, HALTING\n"));
+				halt(1);
+			}
+		// INSERT # OF CHILDREN HERE
+		console("Time: %dms\t",ProcTable[i].cpu_time);
+			
+		console("\n");	
+	}
+	console(" --- PROCESS LIST END ---\n");
 }
 /* dump_processes */
+
+
+
