@@ -77,71 +77,71 @@ unsigned int next_pid = SENTINELPID;
    ----------------------------------------------------------------------- */
 void (*int_vec[NUM_INTS])(int dev, void * unit);
 
-/*
- * check if process is in kernel mode and halt if it isnt
- */
-
- void check_mode(void) {
-  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
-    console("Kernel Error: Not in kernel mode.\n");
-    halt(1);
-  }
+// Check if process is in kernel mode and halt if it isnt
+void check_mode(void)
+{
+	if ((PSR_CURRENT_MODE & psr_get()) == 0)
+	{
+		console("Kernel Error: Not in kernel mode.\n");
+		halt(1);
+	}
 }
 
 
-/*
- * Enables the interrupts.
- */
-void enableInterrupts() {
-  //if we're not in kernel mode then halt
-  if ((PSR_CURRENT_MODE & psr_get()) == 0) {
-    console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
-    halt(1);
-  }
-//if we are in kernel mode, then we can change bits
-  else psr_set(psr_get() | PSR_CURRENT_INT);
+// Enables interrupts
+void enableInterrupts()
+{
+//if we're not in kernel mode then halt
+	if ((PSR_CURRENT_MODE & psr_get()) == 0)
+	{
+		console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
+		halt(1);
+	}
+	//if we are in kernel mode, then we can change bits
+	else psr_set(psr_get() | PSR_CURRENT_INT);
 }
 /* enableInterrupts */
 
 
-/*
- * Disables the interrupts.
- */
-void disableInterrupts() {
-  /* turn the interrupts OFF iff we are in kernel mode */
-  if((PSR_CURRENT_MODE & psr_get()) == 0) {
-    //not in kernel mode
-    console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
-    halt(1);
-  }
-  else psr_set( psr_get() & ~PSR_CURRENT_INT );
+// Disables interrupts
+void disableInterrupts()
+{
+	/* turn the interrupts OFF iff we are in kernel mode */
+	if((PSR_CURRENT_MODE & psr_get()) == 0)
+	{
+		//not in kernel mode
+		console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
+		halt(1);
+		}
+	else psr_set( psr_get() & ~PSR_CURRENT_INT );
 
-  return;
+	return;
 }
 /* disableInterrupts */
 
 
-/* clock_handler()
- * Don't need to invoke this function. USLOSS invokes this
- * every 20 milliseconds (see USLOSS manual). After 4 approx. intervals it will
- * reach the MAXTIME we have set. time_slice() checks this
- */
-void clock_handler(int dev, void * unit){
-  if (DEBUG && debugflag) console("clock_handler(): started.\n");
-  time_slice();
+/* clock_handler() - Don't need to invoke this function. USLOSS invokes this
+ * Every 20 ms per USLOSS manual - After 4 approx. intervals it will hit MAXTIME
+ * time_slice() checks this */
+void clock_handler(int dev, void * unit)
+{
+	if (DEBUG && debugflag) console("clock_handler(): started.\n");
+	time_slice();
 }
 
-/* used for zap */
-proc_ptr get_proc(int pid) {
+/* Used for zap */
+proc_ptr get_proc(int pid)
+{
   proc_ptr walker = &ProcTable[pid];
-  if (walker->pid != pid) return NULL;
-  else return walker;
+	if (walker->pid != pid) return NULL;
+
+	else return walker;
 }
 
-/* initializes a new process */
-void init_process(int index) {
+/* Initializes a new process */
+void init_process(int index)
+{
     check_mode();
-
     ProcTable[index].pid = -1;
     ProcTable[index].next_proc_ptr = NO_CURRENT_PROCESS;
     ProcTable[index].next_zappd_ptr = NO_CURRENT_PROCESS;
@@ -153,41 +153,40 @@ void init_process(int index) {
     ProcTable[index].status = NOT_STARTED;
     ProcTable[index].cpu_time = 0;
     ProcTable[index].start_time = 0;
-
 }
 
-/* checks for zapped processes and returns 1 if so*/
-int is_zapped(void) {
-  if (DEBUG && debugflag) console("is_zapped(): started.\n");
-  if (Current->zapped) return 1;
-  else return 0;
+// Checks for zapped processes and returns 1 if so
+int is_zapped(void)
+{
+	if (DEBUG && debugflag) console("is_zapped(): started.\n");
+	if (Current->zapped) return 1;
+	else return 0;
 }
 
-/* get_current_time()
- * returns length of microseconds since program has started running..
- */
-int get_current_time(void) {
-  int time_since_boot = sys_clock();
-  return time_since_boot;
+// get_current_time() - returns length of ms since program started running - INCOMPLETE
+int get_current_time(void)
+{
+	int time_since_boot = sys_clock();
+	return time_since_boot;
 }
 
 /* insertChild()
  * adds newly created child process to currently running
- * process. add this in fork1() once child is filled w/attributes.
- */
-void insertChild(proc_ptr child) {
-
-  proc_ptr walker = Current;
-  if (walker->child_proc_ptr != NULL) {
-    proc_ptr sibling = walker->child_proc_ptr;
-    while (sibling->next_sibling_ptr != NULL) {
-      sibling = sibling->next_sibling_ptr;
-    }
-    sibling->next_sibling_ptr = child;
-  }
-  else walker->child_proc_ptr = child;
-
-  Current->num_children++;
+ * process. add this in fork1() once child is filled w/attributes. */
+void insertChild(proc_ptr child)
+{
+	proc_ptr walker = Current;
+	if (walker->child_proc_ptr != NULL)
+		{
+		proc_ptr sibling = walker->child_proc_ptr;
+		while (sibling->next_sibling_ptr != NULL)
+		{
+			sibling = sibling->next_sibling_ptr;
+		}
+		sibling->next_sibling_ptr = child;
+	}
+	else walker->child_proc_ptr = child;
+	Current->num_children++;
 }
 
 /* insertRL()
