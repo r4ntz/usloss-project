@@ -133,7 +133,7 @@ void clock_handler(int dev, void * unit){
 
 /* used for zap */
 proc_ptr get_proc(int pid) {
-  proc_ptr walker = &ProcTable[pid % MAXPROC];
+  proc_ptr walker = &ProcTable[pid];
   if (walker->pid != pid) return NULL;
   else return walker;
 }
@@ -273,13 +273,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       proc_slot = 1;
     }
     else {
-      for (int i = next_pid; i < (next_pid + MAXPROC); i++) {
+      for (int i = next_pid; i < (MAXPROC - next_pid); i++) {
         if (ProcTable[i%MAXPROC].status == NOT_STARTED) {
           proc_slot = i%MAXPROC;
           break;
         }
-	  next_pid++;
       }
+      next_pid++;
     }
 
     //----
@@ -320,7 +320,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
     }
 
     /* set pid */
-    ProcTable[proc_slot].pid = next_pid;
+    ProcTable[proc_slot].pid = proc_slot;
 
    /* generate stack */
    ProcTable[proc_slot].stack = (char *) malloc(stacksize);
@@ -549,7 +549,6 @@ int zap(int pid) {
   proc_ptr zap_this = get_proc(pid % MAXPROC);
   if (DEBUG && debugflag) console("zap(): going to zap %s()\n", zap_this->name);
   zap_this->zapped = 1;
-
   if (ZappedList == NULL) {
     ZappedList = zap_this;
   }
@@ -563,7 +562,6 @@ int zap(int pid) {
 
   //no need to remove from RL because quit will do this on each zapped process
   Current->status = ZAPBLOCKED;
-
   if (Current->zapped) {
     if (DEBUG && debugflag) console("zap(): current process is zapped..\n");
     return -1;
@@ -756,7 +754,6 @@ void quit(int code) {
           ProcTable[parent_pid].child_proc_ptr = NULL;
       }
 
-      console("Assigning code to %s. Code: %d\n", Current->name, code);
       Current->code = &code;
       ProcTable[parent_pid].num_children--;
     }
@@ -920,7 +917,51 @@ static void check_deadlock() {
 
    ----------------------------------------------------------------------- */
 
+   /* ------------------------------------------------------------------------
+      Name - dump_processes
+      Purpose - Print process information to the console.
+   		For each PCB in the process:
+   			-table print (at a minimum) its PID
+   			-parent’s PID
+   			-priority
+   			-process status (e.g. unused,running, ready, blocked, etc.)
+   			-# of children
+   			-CPU time consumed
+   			-name
+
+      Parameters - none
+      Returns - nothing
+      Side Effects -  ????
+
+      ----------------------------------------------------------------------- */
+
 void dump_processes(void) {
-	return;
+  if (DEBUG && debugflag) {
+   		console("dump_processes(void): Outputting all proc info\n");
+  }
+
+  console("\n --- PROCESS LIST START---\n");
+  //output running procs based on a valid PID
+  for (int i=1; i < MAXPROC; i++){
+   	console("Name: %s\t",ProcTable[i].name);
+   	console("PID: %d\t",ProcTable[i].pid);
+   	console("PRI: %d\t",ProcTable[i].priority);
+   	if(ProcTable[i].status == QUIT) console("Status: QUIT\t");
+   	else if(ProcTable[i].status == ZAPBLOCKED) console("Status: ZAPBLOCKED\t");
+   	else if(ProcTable[i].status == READY) console("Status: READY\t");
+   	else if(ProcTable[i].status == RUNNING) console("Status: RUNNING\t");
+   	else if(ProcTable[i].status == ZOMBIE) console("Status: ZOMBIE\t");
+   	else if(ProcTable[i].status == JOINBLOCKED) console("Status: JOINBLOCKED\t");
+    else if (ProcTable[i].status == NOT_STARTED) console("Status: NOT_STARTED\t");
+   	else {
+      console("\nStatus: INVALID STATUS, HALTING\n");
+   	  halt(1);
+   	}
+   	// INSERT # OF CHILDREN HERE
+   	console("Time: %dms\n",ProcTable[i].cpu_time);
+  }
+  console(" --- PROCESS LIST END ---\n");
 }
+   /* dump_processes */
+
 /* dump_processes */
