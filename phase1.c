@@ -1,26 +1,25 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/21/2021 9:33PM.
+   Last Edit: 2/22/2021 2:56AM.
 
    phase1.c
 
    CSCV 452
 
    TO-DO:
-   -possibly re-implement clear_process for end of quit()
-   -find out a way to handle zapblocked processes that contains a zapped process in ZappedList
-   -context_switch with other process that is now in ZappedList AFTER calling zap()
-   -do a check in the beginning of dispatcher for ZAPPEDBLOCK on Current
-   -Make zapped attr zero on zapped process when it quits so that zappedblock process can continue through dispatcher
+   -look into re-implementing clear_process. may look more comparable to correct
+	 output. e.g nextPID keeps increasing but more processes are being made thus
+	 processes might be cleaned out of the table
 
 
    CHANGES:
-   -kernel.h: ZAPBLOCKED and JOINBLOCKED, rather than simple BLOCKED
-   -phase1.c: --clear_process(), ++ZappedList, checks for JOINBLOCKED
-   in dispatcher(), dispatcher now zapblocks current process if a child is still active (WIP)
+   -JOINBLOCK and ZAPBLOCK are both separate and not interlinked due to a
+	 misunderstanding
+	 -UNBLOCK_PROC and BLOCK_PROC implemented. they both essentially dequeue or
+	 enqueue, change the status, and call dispatcher. helps reduce redundancy and
+	 is a required function anyways
 
-
-   ------------------------------------------------------------------------ */
+------------------------------------------------------------------------ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -28,10 +27,6 @@
 #include <stdio.h>
 #include <phase1.h>
 #include "kernel.h"
-
-/* for getpid() */
-#include <sys/types.h>
-#include <unistd.h>
 
 /* ------------------------- Prototypes ----------------------------------- */
 int sentinel (char *); //from (void *) to (char *dummy)
@@ -42,6 +37,7 @@ extern void dump_processes(void);
 void dispatcher(void);
 void launch();
 void clock_handler(int dev, void * unit);
+int getpid(void);
 static void enableInterrupts();
 static void check_deadlock();
 
@@ -153,6 +149,10 @@ void init_process(int index)
     ProcTable[index].status = NOT_STARTED;
     ProcTable[index].cpu_time = 0;
     ProcTable[index].start_time = 0;
+}
+
+int getpid(void) {
+	return Current->pid;
 }
 
 // Checks for zapped processes and returns 1 if so
@@ -272,13 +272,13 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
       proc_slot = 1;
     }
     else {
-      for (int i = next_pid; i < (MAXPROC - next_pid); i++) {
-        if (ProcTable[i%MAXPROC].status == NOT_STARTED) {
-          proc_slot = i%MAXPROC;
+			next_pid++;
+      for (int i = next_pid%MAXPROC; i <= MAXPROC; i++) {
+        if (ProcTable[i].status == NOT_STARTED) {
+          proc_slot = i;
           break;
         }
       }
-      next_pid++;
     }
 
     //----
@@ -350,8 +350,8 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    if (priority != SENTINELPRIORITY) {
      dispatcher();
    }
-
-   return next_pid++;
+	 //next_pid++;
+   return proc_slot;
 }
 
 /* startup()
@@ -366,7 +366,7 @@ void startup() {
    int result; /* value returned by call to fork1() */
 
    /* initialize the process table */
-   for (i = 0; i < MAXPROC; i++) {
+   for (i = 1; i <= MAXPROC; i++) {
      init_process(i);
    }
 
@@ -468,9 +468,6 @@ void time_slice(void) {
   }
   if (Current->time_sliced == 4) {
     Current->time_sliced = 0;
-    removeRL(Current);
-    insertRL(Current);
-    Current->status = READY;
     dispatcher();
   }
 }
@@ -488,6 +485,7 @@ int read_cur_start_time(void) {
  */
 
 int block_me(int new_status) {
+	check_mode();
   if (new_status <= 10) {
     console("block_me(): new_status must be larger than ten. val: %d\n", new_status);
     halt(1);
@@ -495,7 +493,6 @@ int block_me(int new_status) {
 
   if (Current->zapped) return -1;
 
-  check_mode();
 
   //may have to get rid of three lines below and just call dispatcher()
   //but I need to use new_status in some way not sure how right now..
@@ -507,8 +504,9 @@ int block_me(int new_status) {
   return 0;
 }
 
+
 int unblock_proc(int pid){
-  if (Current->pid == pid) {
+  if (pid == getpid() || ProcTable[pid].pid == -1) {
     return -2;
   }
 
@@ -517,11 +515,13 @@ int unblock_proc(int pid){
   if (unblock_this != NULL) {
     if (unblock_this->status <= 10) return -2;
     else if (unblock_this->status == ZAPBLOCKED) return -2;
-    else if (unblock_this->zapped) return -1;
-
+		unblock_this->status = READY;
     insertRL(unblock_this);
-    return 0;
+		dispatcher();
+		if (unblock_this->zapped) return -1;
+		else return 0;
   }
+
   else return -2;
 }
 
@@ -539,37 +539,32 @@ int zap(int pid) {
 
   //Current can't be zapped ---
   //when it gets zapped in dispatcher(), Current changes and becomes old_process
-  if (Current->pid == pid) {
+  if (pid == getpid()) {
     if (DEBUG && debugflag) console("zap(): can't zap self\n");
     halt(1);
   }
 
   //add process associated with pid to zap queue
-  proc_ptr zap_this = get_proc(pid % MAXPROC);
+  proc_ptr zap_this = get_proc(pid);
   if (DEBUG && debugflag) console("zap(): going to zap %s()\n", zap_this->name);
   zap_this->zapped = 1;
-  if (ZappedList == NULL) {
-    ZappedList = zap_this;
+  if (zap_this->next_zappd_ptr == NULL) {
+    zap_this->next_zappd_ptr = Current;
   }
   else {
-    proc_ptr walker = ZappedList;
+    proc_ptr walker = Current->next_zappd_ptr;
     while (walker->next_zappd_ptr != NULL) {
       walker = walker->next_zappd_ptr;
     }
-    walker->next_zappd_ptr = zap_this;
+    walker->next_zappd_ptr = Current;
   }
 
   //no need to remove from RL because quit will do this on each zapped process
-  Current->status = ZAPBLOCKED;
-  if (Current->zapped) {
-    if (DEBUG && debugflag) console("zap(): current process is zapped..\n");
-    return -1;
-  }
+	block_me(ZAPBLOCKED);
 
   return 0;
 
 }
-
 /* ------------------------------------------------------------------------
    Name - launch
    Purpose - Dummy function to enable interrupts and launch a given process
@@ -655,7 +650,8 @@ int join(int * code) {
       console("join(): children havent quit yet, ");
       console("setting status of parent to JOINBLOCKED\n", Current->name);
     }
-    Current->status = JOINBLOCKED;
+
+		block_me(JOINBLOCKED);
 
     if (is_zapped()) {
       return -1;
@@ -693,10 +689,7 @@ void quit(int code) {
     if (DEBUG && debugflag) console("quit(): is_zapped() returns TRUE\n");
     walker_zappd = ZappedList;
     while (walker_zappd != NULL) {
-      proc_ptr temp_proc = &ProcTable[walker_zappd->pid % MAXPROC];
-      temp_proc->status = READY;
-      insertRL(temp_proc);
-      if (DEBUG && debugflag) console("quit(): inserted zapped process into RL\n");
+			unblock_proc(walker_zappd->pid);
       walker_zappd = walker_zappd->next_zappd_ptr;
     }
   }
@@ -725,11 +718,10 @@ void quit(int code) {
 
     int parent_pid = Current->parent_ptr->pid;
     //(1) check to see if parent is blocked
-    if (ProcTable[parent_pid].status == JOINBLOCKED) {
+    if (ProcTable[parent_pid].status == JOINBLOCKED || ProcTable[parent_pid].status == ZAPBLOCKED) {
       if (DEBUG && debugflag) console("quit(): %s's parent is blocked.\n", Current->name);
       Current->status = QUIT; //still need to set this child as quit
-      ProcTable[parent_pid].status = READY;
-      insertRL(&ProcTable[parent_pid]);
+			unblock_proc(parent_pid);
 
       //we dont want to run second conditional more than once so lets check
       //to see if they're linked
@@ -817,35 +809,23 @@ void dispatcher(void) {
      context_switch(NULL, &Current->state);
    }
    else {
-     old_process = Current;
-     Current = ReadyList;
+  	old_process = Current;
+    Current = ReadyList;
+  }
 
-     //in case its trying to swap child for parent
-     if (old_process->parent_ptr == Current && old_process->status != ZAPBLOCKED) {
-       if (DEBUG && debugflag) {
-         console("dispatcher(): can't switch child with active parent - ");
-         console("child: %s, parent: %s. zapping.\n", old_process->name, Current->name);
-       }
-       zap(old_process->pid);
-       //Current = old_process;
-       //return;
-     }
+  Current->start_time = get_current_time();
+  Current->status = RUNNING;
 
-     Current->start_time = get_current_time();
-     Current->status = RUNNING;
+	if (old_process->pid != -1) {
+  	int time_now = sys_clock();
+    int cpu_time = (time_now - old_process->start_time)/1000;
+    old_process->cpu_time = cpu_time;
+	}
+  else old_process->cpu_time = 0;
 
-     if (old_process->pid != -1) {
-       int time_now = sys_clock();
-       int cpu_time = (time_now - old_process->start_time)/1000;
-       old_process->cpu_time = cpu_time;
-     }
-     else old_process->cpu_time = 0;
-
-    //p1_switch(old_process->pid, Current->pid);
-    if (DEBUG && debugflag) console("dispatcher(): old: %s()\tnew: %s()\n", old_process->name, Current->name );
-    context_switch(&old_process->state, &Current->state);
-   }
-
+	//p1_switch(old_process->pid, Current->pid);
+  if (DEBUG && debugflag) console("dispatcher(): old: %s()\tnew: %s()\n", old_process->name, Current->name );
+  context_switch(&old_process->state, &Current->state);
 } /* dispatcher */
 
 
@@ -880,7 +860,7 @@ static void check_deadlock() {
   int available_processes = 0;
 
   if (DEBUG && debugflag) console("check_deadlock(): called. process: %s\n", Current->name);
-  for (int i=2; i<MAXPROC; i++) {
+  for (int i=2; i<=MAXPROC; i++) {
     if (ProcTable[i].status != QUIT && ProcTable[i].status != NOT_STARTED) {
       available_processes = 1;
     }
@@ -896,25 +876,6 @@ static void check_deadlock() {
     halt(0);
   }
 }
-
-
-/* ------------------------------------------------------------------------
-   Name - dump_processes
-   Purpose - Print process information to the console.
-		For each PCB in the process:
-			-table print (at a minimum) its PID
-			-parent’s PID
-			-priority
-			-process status (e.g. unused,running, ready, blocked, etc.)
-			-# of children
-			-CPU time consumed
-			-name
-
-   Parameters - none
-   Returns - nothing
-   Side Effects -  ????
-
-   ----------------------------------------------------------------------- */
 
    /* ------------------------------------------------------------------------
       Name - dump_processes
@@ -941,7 +902,7 @@ void dump_processes(void) {
 
   console("\n --- PROCESS LIST START---\n");
   //output running procs based on a valid PID
-  for (int i=1; i < MAXPROC; i++){
+  for (int i=1; i <= MAXPROC; i++){
    	console("Name: %s\t",ProcTable[i].name);
    	console("PID: %d\t",ProcTable[i].pid);
    	console("PRI: %d\t",ProcTable[i].priority);
@@ -961,6 +922,4 @@ void dump_processes(void) {
   }
   console(" --- PROCESS LIST END ---\n");
 }
-   /* dump_processes */
-
 /* dump_processes */
