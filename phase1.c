@@ -1,6 +1,6 @@
 /* ------------------------------------------------------------------------
    Mark Whitson & Rantz Marion
-   Last Edit: 2/21/2021 1:30AM.
+   Last Edit: 2/21/2021 9:33PM.
 
    phase1.c
 
@@ -211,7 +211,7 @@ void insertRL(proc_ptr proc) {
     if(DEBUG && debugflag) console("insertRL(): inserting process pid:%d at front of RL - ", proc->pid);
     proc->next_proc_ptr = ReadyList;
     ReadyList = proc;
-    if(DEBUG && debugflag) console("new head: %s() which should == %s\n", ReadyList->name, proc->name);
+    if(DEBUG && debugflag) console("new head: %s()\n", ReadyList->name);
   }
   //check to see if we can insert anywhere thats not the tail
   else {
@@ -334,7 +334,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
                 ProcTable[proc_slot].stacksize, launch);
 
    /* for future phase(s) */
-   p1_fork(ProcTable[proc_slot].pid);
+   //p1_fork(ProcTable[proc_slot].pid);
 
 
    /* determine to add process as parent or child */
@@ -535,10 +535,11 @@ int unblock_proc(int pid){
  */
 
 int zap(int pid) {
-  if (DEBUG && debugflag) console("zap(): starting\n");
+  if (DEBUG && debugflag) console("zap(): started.\n");
   check_mode();
 
-  //Current can't be zapped
+  //Current can't be zapped ---
+  //when it gets zapped in dispatcher(), Current changes and becomes old_process
   if (Current->pid == pid) {
     if (DEBUG && debugflag) console("zap(): can't zap self\n");
     halt(1);
@@ -546,6 +547,7 @@ int zap(int pid) {
 
   //add process associated with pid to zap queue
   proc_ptr zap_this = get_proc(pid % MAXPROC);
+  if (DEBUG && debugflag) console("zap(): going to zap %s()\n", zap_this->name);
   zap_this->zapped = 1;
 
   if (ZappedList == NULL) {
@@ -559,11 +561,8 @@ int zap(int pid) {
     walker->next_zappd_ptr = zap_this;
   }
 
-  //now we just insert our zapped process into Current's zapped process queue
-  //and mark Current as blocked
+  //no need to remove from RL because quit will do this on each zapped process
   Current->status = ZAPBLOCKED;
-  removeRL(Current);
-  dispatcher();
 
   if (Current->zapped) {
     if (DEBUG && debugflag) console("zap(): current process is zapped..\n");
@@ -599,6 +598,8 @@ void launch() {
 
   if (DEBUG && debugflag)
     console("launch(): process %s() returned to launch, result: %d\n", Current->name, result);
+  if (Current->parent_ptr != NULL && Current->parent_ptr->status == JOINBLOCKED)
+    console("%s's parent is join blocked!\n", Current->name);
 
   quit(result);
 
@@ -640,7 +641,6 @@ int join(int * code) {
   //if child is a zombie
   if (curr_child->status ==  ZOMBIE) {
     if (DEBUG && debugflag) console("join(): found zombie child\n");
-    *code = curr_child->status;
     Current->num_children--;
     if (curr_child->next_zappd_ptr == NULL) {
       curr_child->status = QUIT;
@@ -654,19 +654,22 @@ int join(int * code) {
 
   //otherwise..
   else {
-    if (DEBUG && debugflag) console("join(): unable to find a zombie child\n");
+    if (DEBUG && debugflag) {
+      console("join(): children havent quit yet, ");
+      console("setting status of parent to JOINBLOCKED\n", Current->name);
+    }
     Current->status = JOINBLOCKED;
-    removeRL(Current);
-    dispatcher();
+
     if (is_zapped()) {
       return -1;
     }
-    *code = Current->child_proc_ptr->status;
-
+    code = Current->child_proc_ptr->code;
+    removeRL(Current);
+    if (DEBUG && debugflag) console("join(): process (%s) is calling dispatcher.", Current->child_proc_ptr->name);
+    dispatcher();
     return curr_child->pid;
   }
 
-  //Current->numChildren--;
   return -1;
 }
 
@@ -681,19 +684,22 @@ int join(int * code) {
    Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
-  if (DEBUG && debugflag) console("quit(): started\n");
+  if (DEBUG && debugflag) console("quit(): started - process (%s)\n", Current->name);
   check_mode();
 
   proc_ptr walker_zappd, walker_child;
 
   removeRL(Current);
-
+  if (DEBUG && debugflag) console("quit(): %s was removed from RL\n", Current->name);
+  //if its zapped then that must mean that its parent is ZAPBLOCKED
   if (is_zapped()) {
-    walker_zappd = Current->next_zappd_ptr;
+    if (DEBUG && debugflag) console("quit(): is_zapped() returns TRUE\n");
+    walker_zappd = ZappedList;
     while (walker_zappd != NULL) {
       proc_ptr temp_proc = &ProcTable[walker_zappd->pid % MAXPROC];
       temp_proc->status = READY;
       insertRL(temp_proc);
+      if (DEBUG && debugflag) console("quit(): inserted zapped process into RL\n");
       walker_zappd = walker_zappd->next_zappd_ptr;
     }
   }
@@ -715,11 +721,19 @@ void quit(int code) {
 
   //if quitting process has a parent
   if(Current->parent_ptr != NO_CURRENT_PROCESS) {
+    if (DEBUG && debugflag) {
+      console("quit(): process confirmed to be a child, ");
+      console("checking if parent is blocked.\n");
+    }
+
     int parent_pid = Current->parent_ptr->pid;
     //(1) check to see if parent is blocked
     if (ProcTable[parent_pid].status == JOINBLOCKED) {
-      insertRL(&ProcTable[parent_pid]);
+      if (DEBUG && debugflag) console("quit(): %s's parent is blocked.\n", Current->name);
+      Current->status = QUIT; //still need to set this child as quit
       ProcTable[parent_pid].status = READY;
+      insertRL(&ProcTable[parent_pid]);
+
       //we dont want to run second conditional more than once so lets check
       //to see if they're linked
       if (Current->next_sibling_ptr != NULL) {
@@ -742,20 +756,37 @@ void quit(int code) {
           ProcTable[parent_pid].child_proc_ptr = NULL;
       }
 
+      console("Assigning code to %s. Code: %d\n", Current->name, code);
+      Current->code = &code;
       ProcTable[parent_pid].num_children--;
-      ProcTable[parent_pid].child_status = code;
-
     }
 
     //(2) otherwise just mark it as a zombie
-    else Current->status = ZOMBIE;
+    else {
+      if (DEBUG && debugflag)
+        console("quit(): process (%s) was not blocked. turning into zombie\n", Current->name);
+      Current->status = ZOMBIE;
+    }
   }
 
-  Current->status = QUIT;
-  p1_quit(Current->pid);
-  free(Current->stack);
+  //if its a parent, lets check if it was JOINBLOCKED before
+  else if (Current->status == JOINBLOCKED) {
+    if (DEBUG && debugflag)
+      console("quit(): process (%s) is a parent that was JOINBLOCKED so we will go straight ahead and call dispatcher\n", Current->name);
+  }
 
-  //this is so that the next process can run
+  //if its not a child then mark as QUIT
+  else {
+    if (DEBUG && debugflag)
+      console("quit(): process (%s) confirmed to be adult. setting status to QUIT\n", Current->name);
+    //p1_quit(Current->pid);
+    Current->status = QUIT;
+  }
+
+  #ifdef __APPLE__
+    free(Current->stack);
+  #endif
+  if (DEBUG && debugflag) console("quit(): process (%s) is calling dispatcher()\n", Current->name);
   dispatcher();
 
 } /* quit */
@@ -776,17 +807,6 @@ void dispatcher(void) {
    if (DEBUG && debugflag) console("dispatcher(): started.\n");
    check_mode();
 
-   //clear any processes that have quit from proc table to make searching easier/more clean
-   //if (DEBUG && debugflag) console("dispatcher(): clearing processes that have quit.\n");
-   //for (int i=1; i<MAXPROC; i++) {
-     //found parent thats quit
-     //if (ProcTable[i].status == QUIT) clear_process(i);
-     //found child thats quit
-     //else if (ProcTable[i].status == ZOMBIE) {
-      //if(ProcTable[i].parent_ptr->pid == -1) clear_process(i);
-     //}
-   //}
-
    if (DEBUG && debugflag) console("dispatcher(): context switching.\n");
 
 
@@ -805,8 +825,14 @@ void dispatcher(void) {
      Current = ReadyList;
 
      //in case its trying to swap child for parent
-     if (old_process->parent_ptr == Current) {
+     if (old_process->parent_ptr == Current && old_process->status != ZAPBLOCKED) {
+       if (DEBUG && debugflag) {
+         console("dispatcher(): can't switch child with active parent - ");
+         console("child: %s, parent: %s. zapping.\n", old_process->name, Current->name);
+       }
        zap(old_process->pid);
+       //Current = old_process;
+       //return;
      }
 
      Current->start_time = get_current_time();
@@ -819,7 +845,7 @@ void dispatcher(void) {
      }
      else old_process->cpu_time = 0;
 
-    p1_switch(old_process->pid, Current->pid);
+    //p1_switch(old_process->pid, Current->pid);
     if (DEBUG && debugflag) console("dispatcher(): old: %s()\tnew: %s()\n", old_process->name, Current->name );
     context_switch(&old_process->state, &Current->state);
    }
@@ -858,13 +884,11 @@ static void check_deadlock() {
   int available_processes = 0;
 
   if (DEBUG && debugflag) console("check_deadlock(): called. process: %s\n", Current->name);
-  for (int i=1; i<MAXPROC; i++) {
-    if (ProcTable[i].status != QUIT) {
+  for (int i=2; i<MAXPROC; i++) {
+    if (ProcTable[i].status != QUIT && ProcTable[i].status != NOT_STARTED) {
       available_processes = 1;
     }
   }
-
-	dump_processes();
 
   if (available_processes) {
     if (DEBUG && debugflag) console("check_deadlock(): there are processes still remaining\n");
@@ -897,35 +921,6 @@ static void check_deadlock() {
    ----------------------------------------------------------------------- */
 
 void dump_processes(void) {
-	
-    if (DEBUG && debugflag){
-		console("dump_processes(void): Outputting all proc info\n");
-	}
-	
-	
-	console(" --- PROCESS LIST START---\n");
-	//output running procs based on a valid PID
-	for (int i=1; ProcTable[i].pid>0; i++){
-		console("Name: %s\t",ProcTable[i].name);
-		console("PID: %d\t",ProcTable[i].pid);
-		console("PRI: %d\t",ProcTable[i].priority);
-			if(ProcTable[i].status = QUIT) {console("Status: QUIT\t");}
-			else if(ProcTable[i].status = ZAPBLOCKED) {console("Status: ZAPBLOCKED\t");}
-			else if(ProcTable[i].status = READY) {console("Status: READY\t");}
-			else if(ProcTable[i].status = RUNNING) {console("Status: RUNNING\t");}
-			else if(ProcTable[i].status = ZOMBIE) {console("Status: ZOMBIE\t");}
-			else if(ProcTable[i].status = JOINBLOCKED) {console("Status: JOINBLOCKED\t");}
-			else{(console("Status: INVALID STATUS, HALTING\n"));
-				halt(1);
-			}
-		// INSERT # OF CHILDREN HERE
-		console("Time: %dms\t",ProcTable[i].cpu_time);
-			
-		console("\n");	
-	}
-	console(" --- PROCESS LIST END ---\n");
+	return;
 }
 /* dump_processes */
-
-
-
