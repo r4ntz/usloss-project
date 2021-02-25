@@ -1,4 +1,4 @@
-#define DEBUG 1
+#define DEBUG 0
 
 #define NOT_STARTED -1
 #define QUIT 0
@@ -32,7 +32,7 @@ struct proc_struct {
    int            start_time;
    int            cpu_time;
    int            time_sliced;
-   int *          code;
+   int            child_status;
    proc_ptr       parent_ptr;
    int            num_children;
 };
