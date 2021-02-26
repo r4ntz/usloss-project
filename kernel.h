@@ -1,12 +1,12 @@
 #define DEBUG 0
 
-#define NOT_STARTED -1
+#define EMPTY -1
 #define QUIT 0
-#define ZAPBLOCKED 1
+#define ZAP_BLOCK 1
 #define READY 2
 #define RUNNING 3
 #define ZOMBIE 4
-#define JOINBLOCKED 5
+#define JOIN_BLOCK 5
 
 typedef struct proc_struct proc_struct;
 
@@ -28,7 +28,7 @@ struct proc_struct {
    int            status;         /* READY, BLOCKED, QUIT, etc. */
 
    /* other fields as needed... */
-   int            zapped; /* keeps track of number of zapped processes */
+   int            zapped; /* to indicate whether a process is zapped */
    int            start_time;
    int            cpu_time;
    int            time_sliced;
@@ -56,4 +56,4 @@ union psr_values {
 #define MAXPRIORITY 1
 #define SENTINELPID 1
 #define SENTINELPRIORITY LOWEST_PRIORITY
-#define MAXTIME 80 //milliseconds
+#define MAXTIME 80000 //microseconds if I remember correctly

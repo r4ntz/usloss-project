@@ -1,17 +1,15 @@
 /* ------------------------------------------------------------------------
-   Mark Whitson & Rantz Marion
-   Last Edit: 2/25/2021 12:30AM.
+	Mark Whitson & Rantz Marion
+	Last Edit: 2/25/2021 11:30PM.
 
-   phase1.c
+	phase1.c
 
-   CSCV 452
+	CSCV 452
 
-   TO-DO:
-  -keep debugging test cases
-
-
-   CHANGES:
-	 -test cases 1-4 work so far. having issues with 5 atm
+	-Issues with test case 5 and 23. Haven't tested past 23 yet.
+	 --Case 5: Looks like an issue with clock_handler im not sure. It's not
+	 		being invoked by USLOSS even though its defined.
+	 --Case 23: Issues with zombie children in quit() need to investigate.
 
 ------------------------------------------------------------------------ */
 
@@ -31,10 +29,22 @@ extern void dump_processes(void);
 void dispatcher(void);
 void launch();
 void clock_handler(int dev, void * unit);
+void check_mode(void);
 int getpid(void);
-static void enableInterrupts();
+int zap(int);
+int is_zapped(void);
+int get_current_time(void);
+void removeChild(proc_ptr);
+void insertChild(proc_ptr);
+void insertRL(proc_ptr);
+void removeRL(proc_ptr);
+void time_slice(void);
+int block_me(int);
+int unblock_proc(int);
+void enableInterrupts();
+void disableInterrupts();
 static void check_deadlock();
-
+void init_process(int);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -53,19 +63,14 @@ proc_ptr Current;
 /* the next pid to be assigned */
 unsigned int next_pid = SENTINELPID;
 
+/* ------------------------------------------------------------------------ */
 
-/* -------------------------- Functions ----------------------------------- */
+
+
 /* ------------------------------------------------------------------------
-   Name - startup
-   Purpose - Initializes process lists and clock interrupt vector.
-	     Start up sentinel process and the test process.
-   Parameters - none, called by USLOSS
-   Returns - nothing
-   Side Effects - lots, starts the whole thing
-   ----------------------------------------------------------------------- */
-void (*int_vec[NUM_INTS])(int dev, void * unit);
-
-// Check if process is in kernel mode and halt if it isnt
+   Name - check_mode
+   Purpose - checks to see if we're currently in kernel mode otherwise halt
+------------------------------------------------------------------------ */
 void check_mode(void)
 {
 	if ((PSR_CURRENT_MODE & psr_get()) == 0)
@@ -76,43 +81,41 @@ void check_mode(void)
 }
 
 
-// Enables interrupts
+
+/* ------------------------------------------------------------------------
+ Name - enableInterrupts
+ ------------------------------------------------------------------------ */
 void enableInterrupts()
 {
 //if we're not in kernel mode then halt
-	if ((PSR_CURRENT_MODE & psr_get()) == 0)
-	{
-		console("Kernel Error: Not in kernel mode, may not enable interrupts\n");
-		halt(1);
-	}
+	check_mode();
 	//if we are in kernel mode, then we can change bits
-	else psr_set(psr_get() | PSR_CURRENT_INT);
+	psr_set(psr_get() | PSR_CURRENT_INT);
 }
-/* enableInterrupts */
 
 
-// Disables interrupts
+/* ------------------------------------------------------------------------
+ Name - disableInterrupts
+ ------------------------------------------------------------------------ */
 void disableInterrupts()
 {
+	//if we're not in kernel mode then halt
+	check_mode();
 	/* turn the interrupts OFF iff we are in kernel mode */
-	if((PSR_CURRENT_MODE & psr_get()) == 0)
-	{
-		//not in kernel mode
-		console("Kernel Error: Not in kernel mode, may not disable interrupts\n");
-		halt(1);
-		}
-	else psr_set( psr_get() & ~PSR_CURRENT_INT );
+	psr_set(psr_get() & ~PSR_CURRENT_INT);
 
-	return;
 }
-/* disableInterrupts */
 
+/* ------------------------------------------------------------------------
+Name - clock_handler
+Purpose - Don't need to invoke this function. USLOSS invokes this
+	every 20 ms per USLOSS manual - After 4 approx. intervals it will hit MAXTIME
+	time_slice() checks this
+ ------------------------------------------------------------------------ */
 
-/* clock_handler() - Don't need to invoke this function. USLOSS invokes this
- * Every 20 ms per USLOSS manual - After 4 approx. intervals it will hit MAXTIME
- * time_slice() checks this */
 void clock_handler(int dev, void * unit)
 {
+	console("Started!\n");
 	if (DEBUG && debugflag) console("clock_handler(): started.\n");
 	time_slice();
 }
@@ -126,10 +129,14 @@ proc_ptr get_proc(int pid)
 	else return walker;
 }
 
-/* Initializes a new process */
+
+/* ------------------------------------------------------------------------
+   Name - init_process
+   Purpose - initializes attributes for process or clears them in case of
+	 quit to make room for more processes
+   ------------------------------------------------------------------------ */
 void init_process(int index)
 {
-    check_mode();
     ProcTable[index].pid = -1;
 		ProcTable[index].name[0] = '\0';
 		ProcTable[index].priority = 0;
@@ -142,9 +149,9 @@ void init_process(int index)
     ProcTable[index].zapped = 0;
     ProcTable[index].time_sliced = 0;
     ProcTable[index].num_children = 0;
-    ProcTable[index].status = NOT_STARTED;
-    ProcTable[index].cpu_time = -1;
+    ProcTable[index].status = EMPTY;
     ProcTable[index].start_time = -1;
+		ProcTable[index].cpu_time = -1;
 		#ifdef __APPLE__
 			free(ProcTable[index].stack);
 		#endif
@@ -152,11 +159,18 @@ void init_process(int index)
 		ProcTable[index].child_status = 0;
 }
 
+/* ------------------------------------------------------------------------
+   Name - getpid
+   Purpose - gets pid of current process
+   ------------------------------------------------------------------------ */
 int getpid(void) {
 	return Current->pid;
 }
 
-// Checks for zapped processes and returns 1 if so
+/* ------------------------------------------------------------------------
+   Name - is_zapped
+   Purpose - checks to see if current process was zapped. return 1 otherwise 0
+   ------------------------------------------------------------------------ */
 int is_zapped(void)
 {
 	if (DEBUG && debugflag) console("is_zapped(): started.\n");
@@ -164,16 +178,21 @@ int is_zapped(void)
 	else return 0;
 }
 
-// get_current_time() - returns length of ms since program started running - INCOMPLETE
+/* ------------------------------------------------------------------------
+   Name - get_current_time
+   Purpose - gets the curent time by calling USLOSS function sys_clock
+   ------------------------------------------------------------------------ */
 int get_current_time(void)
 {
 	int time_since_boot = sys_clock();
 	return time_since_boot;
 }
 
-/* removeChild()
- * removes child from linkedlist of siblings and assigns
- * new child if sibling exists */
+/* ------------------------------------------------------------------------
+   Name - removeChild
+   Purpose - removes child from queue of its respective parent and maintains
+	 links
+   ------------------------------------------------------------------------ */
 void removeChild(proc_ptr child) {
 	if (DEBUG && debugflag)
 	 console("removeChild(): removing %s pid: %d\n", child->name, child->pid);
@@ -200,9 +219,10 @@ void removeChild(proc_ptr child) {
 	parent->num_children--;
 }
 
-/* insertChild()
- * adds newly created child process to currently running
- * process. add this in fork1() once child is filled w/attributes. */
+/* ------------------------------------------------------------------------
+   Name - insertChild
+   Purpose - finds location to insert child of respective parent
+   ------------------------------------------------------------------------ */
 void insertChild(proc_ptr child) {
 	if (DEBUG && debugflag)
 		console("insertChild(): inserting %s pid: %d\n", child->name, child->pid);
@@ -219,10 +239,10 @@ void insertChild(proc_ptr child) {
 	Current->num_children++;
 }
 
-/* insertRL()
- * pretty self-explanatory
- * -- just flipped two operators when they compare priority
- */
+/* ------------------------------------------------------------------------
+   Name - insertRL
+   Purpose - Pretty self-explanatory. Inserts based on priority of process
+   ------------------------------------------------------------------------ */
 void insertRL(proc_ptr proc) {
   if(DEBUG && debugflag) console("insertRL(): started. inserting %s() pid: %d\n", proc->name, proc->pid);
   if (ReadyList == NULL) {
@@ -270,16 +290,8 @@ void insertRL(proc_ptr proc) {
    Purpose - Gets a new process from the process table and initializes
              information of the process.  Updates information in the
              parent process to reflect this child process creation.
-   Parameters - the process procedure address, the size of the stack and
-                the priority to be assigned to the child process.
-   Returns - the process id of the created child or -1 if no child could
-             be created or if priority is not between max and min priority.
-   Side Effects - ReadyList is changed, ProcTable is changed, Current
-                  process information changed
    ------------------------------------------------------------------------ */
 int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) {
-   check_mode();
-
    int proc_slot = -1;
 
    if (DEBUG && debugflag) {
@@ -292,20 +304,21 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    }
    /* Return if stack size is too small */
    if (stacksize < USLOSS_MIN_STACK) {
-     console("stacksize is too small.\n");
-     halt(1);
+     if (DEBUG && debugflag) console("stacksize is too small.\n");
+     return -2;
    }
 
+	 disableInterrupts();
 
    /* find an empty slot in the table */
-    if (ProcTable[1].status == NOT_STARTED) {
+    if (ProcTable[1].status == EMPTY) {
       if (DEBUG && debugflag) console("fork1(): sentinel needs to be started.\n");
       proc_slot = 1;
     }
     else {
 			int max_val = next_pid + MAXPROC;
       for (int i = next_pid; i < max_val; ++i) {
-        if (ProcTable[i%MAXPROC].status == NOT_STARTED) {
+        if (ProcTable[i%MAXPROC].status == EMPTY) {
           proc_slot = i%MAXPROC;
           break;
         }
@@ -347,8 +360,7 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
 
     /* validate priority */
     if ((priority < MAXPRIORITY || priority > MINPRIORITY) && f != sentinel) {
-      if (DEBUG && debugflag)
-       console("%s's priority is %d. max: %d, min: %d\n", name, priority, MINPRIORITY, MAXPRIORITY);
+      console("start1(): couldn't fork a child -- invalid priority\n");
       halt(1);
     }
     else {
@@ -389,13 +401,15 @@ int fork1(char *name, int (*f)(char *), char *arg, int stacksize, int priority) 
    return new_pid;
 }
 
-/* startup()
- *
- * No need to invoke this as USLOSS will do that for us. Equivalent of main()
- */
+
+
+/* ------------------------------------------------------------------------
+   Name - startup
+   Purpose - Initializes process lists and clock interrupt vector.
+	     Start up sentinel process and the test process.
+   ----------------------------------------------------------------------- */
 void startup() {
    if (DEBUG && debugflag) console("startup(): called.\n");
-   check_mode();
 
    int i;      /* loop index */
    int result; /* value returned by call to fork1() */
@@ -406,8 +420,6 @@ void startup() {
    }
 
    /* Initialize the Ready list, etc. */
-   //if (DEBUG && debugflag)
-   //  console("startup(): initializing the Ready & Blocked lists\n");
 
    /* Initialize the clock interrupt handler */
    int_vec[CLOCK_DEV] = clock_handler;
@@ -437,37 +449,39 @@ void startup() {
    console("Returned from fork1 call that created start1\n");
 
    return;
-} /* startup */
+}
+
 
 /* ------------------------------------------------------------------------
    Name - finish
    Purpose - Required by USLOSS
-   Parameters - none
-   Returns - nothing
-   Side Effects - none
    ----------------------------------------------------------------------- */
 void finish() {
-  check_mode();
-
   if (DEBUG && debugflag)
     console("in finish...\n");
 } /* finish */
 
 
-/* Functions related to reading the elapsed time since
- * execution and duration a process has been running
- */
-
-/* returns CPU time (in milleseconds) used by current process */
+/* ------------------------------------------------------------------------
+   Name - readtime
+   Purpose - Gets start time of current process and subtracts it by current
+	 time. Returns the difference
+   ------------------------------------------------------------------------ */
 int readtime(void) {
   int curr_time_since_boot = sys_clock();
   int curr_time = read_cur_start_time();
   //we divide by 1000 since we need to convert to millseconds
-  int cpu_time = (curr_time - curr_time_since_boot)/1000;
+  int cpu_time = (curr_time - curr_time_since_boot);
 
   return cpu_time;
 }
 
+
+/* ------------------------------------------------------------------------
+   Name - removeRL
+   Purpose - pretty self-explanatory. Removes process from queue while
+	 maintaining links
+   ------------------------------------------------------------------------ */
 void removeRL(proc_ptr proc) {
 	if (DEBUG && debugflag)
 		console("removeRL(): removing %s() pid: %d from ReadyList\n", proc->name, proc->pid);
@@ -497,7 +511,6 @@ void removeRL(proc_ptr proc) {
 /* checks to see if process has any time left for execution */
 void time_slice(void) {
   if (DEBUG && debugflag) console("time_slice(): started\n");
-  check_mode();
 
   int elapsed_time = readtime();
   console("elapsed time: %d\n", elapsed_time);
@@ -507,6 +520,9 @@ void time_slice(void) {
   }
   if (Current->time_sliced == 4) {
     Current->time_sliced = 0;
+		Current->priority--;
+		removeRL(Current);
+		insertRL(Current);
     dispatcher();
   }
 }
@@ -519,72 +535,74 @@ int read_cur_start_time(void) {
 /* --------- */
 
 
-/* rough implementation for function used in phase2
- * NOTE: fix these later...
- */
 
+
+/* ------------------------------------------------------------------------
+   Name - block_me
+   Purpose - sets new status on Current process, removes from RL, and calls
+	 dispatcher
+   ------------------------------------------------------------------------ */
 int block_me(int new_status) {
-	check_mode();
-  if (new_status <= 10) {
+	disableInterrupts();
+	if (new_status <= 10) {
     console("block_me(): new_status must be larger than ten. val: %d\n", new_status);
     halt(1);
   }
 
   if (Current->zapped) return -1;
 
-
-  //may have to get rid of three lines below and just call dispatcher()
-  //but I need to use new_status in some way not sure how right now..
   Current->status = new_status;
   removeRL(Current);
-
   dispatcher();
 
-  return 0;
+	if (is_zapped()) return -1;
+	else return 0;
 }
 
 
+
+/* ------------------------------------------------------------------------
+   Name - unblock_proc
+   Purpose - sets status changed by block_me back to READY, inserts into
+	 RL and calls dispatcher
+   ------------------------------------------------------------------------ */
 int unblock_proc(int pid){
-  if (pid == getpid() || ProcTable[pid].pid == -1) {
+	proc_ptr unblock_this = get_proc(pid);
+
+  if (pid == getpid() || unblock_this->pid != pid || unblock_this->status < 11) {
     return -2;
   }
 
-  proc_ptr unblock_this = get_proc(pid);
+	if (is_zapped()) return -1;
 
-  if (unblock_this != NULL) {
-    if (unblock_this->status <= 10) return -2;
-    else if (unblock_this->status == ZAPBLOCKED) return -2;
-		unblock_this->status = READY;
-    insertRL(unblock_this);
-		dispatcher();
-		if (unblock_this->zapped) return -1;
-		else return 0;
-  }
+	unblock_this->status = READY;
+	insertRL(unblock_this);
+	dispatcher();
 
-  else return -2;
+	return 0;
 }
 
 
-/* zap() does not return until zapped process has quit.
- *  returns -1 if calling process itself was zapped while in zap
- *  returns 0 if the zapped process has already quit
- *
- *  NOTE: think of creating a function that removes procs from readylist
- */
 
+/* ------------------------------------------------------------------------
+   Name - zap
+   Purpose - zapblocks current process and removes from RL
+   ------------------------------------------------------------------------ */
 int zap(int pid) {
   if (DEBUG && debugflag) console("zap(): started.\n");
-  check_mode();
 
   //Current can't be zapped ---
   //when it gets zapped in dispatcher(), Current changes and becomes old_process
   if (pid == getpid()) {
-    if (DEBUG && debugflag) console("zap(): can't zap self\n");
+    console("zap(): process %d tried to zap itself. Halting...\n", pid);
     halt(1);
   }
 
+	disableInterrupts();
+
   //add process associated with pid to zap queue
   proc_ptr zap_this = get_proc(pid);
+
   if (DEBUG && debugflag) console("zap(): going to zap %s()\n", zap_this->name);
   zap_this->zapped = 1;
   if (Current->next_zappd_ptr == NULL) {
@@ -599,23 +617,22 @@ int zap(int pid) {
   }
 
   //no need to remove from RL because quit will do this on each zapped process
-	Current->status = ZAPBLOCKED;
+	Current->status = ZAP_BLOCK;
 	removeRL(Current);
 	dispatcher();
 
-  return 0;
+	if (is_zapped()) return -1;
+  else return 0;
 
 }
+
+
 /* ------------------------------------------------------------------------
    Name - launch
    Purpose - Dummy function to enable interrupts and launch a given process
              upon startup.
-   Parameters - none
-   Returns - nothing
-   Side Effects - enable interrupts
    ------------------------------------------------------------------------ */
 void launch() {
-  check_mode();
   int result;
 
   if (DEBUG && debugflag) {
@@ -624,35 +641,27 @@ void launch() {
     console("start_arg: %s\n", Current->start_arg);
   }
   /* Enable interrupts */
-  //enableInterrupts(); not sure why that was put here initially
+  enableInterrupts(); //not sure why that was put here initially
 
   /* Call the function passed to fork1, and capture its return value */
   result = Current->start_func(Current->start_arg);
 
   if (DEBUG && debugflag)
     console("launch(): process %s() returned to launch, result: %d\n", Current->name, result);
-  if (Current->parent_ptr != NULL && Current->parent_ptr->status == JOINBLOCKED)
-    console("%s's parent is join blocked!\n", Current->name);
 
   quit(result);
 
-} /* launch */
+}
+
 
 
 /* ------------------------------------------------------------------------
    Name - join
    Purpose - Wait for a child process (if one has been forked) to quit.  If
              one has already quit, don't wait.
-   Parameters - a pointer to an int where the termination code of the
-                quitting process is to be stored.
-   Returns - the process id of the quitting child joined on.
-		-1 if the process was zapped in the join
-		-2 if the process has no children
-   Side Effects - If no child process has quit before join is called, the
-                  parent is removed from the ready list and blocked.
    ------------------------------------------------------------------------ */
 int join(int * code) {
-  check_mode();
+	disableInterrupts();
 
   if (DEBUG && debugflag) console("join(): started. current: %s, pid: %d\n", Current->name, Current->pid);
 
@@ -673,38 +682,50 @@ int join(int * code) {
 
   proc_ptr curr_child = Current->child_proc_ptr;
 
-  //if child is a zombie
-  if (curr_child->status == ZOMBIE) {
-    if (DEBUG && debugflag) console("join(): found zombie child\n");
-		curr_child->status = QUIT;
-		console("curr_child %s (pid: %d) status is %d\n", curr_child->name, curr_child->pid, curr_child->status);
-		*code = curr_child->status;
-		removeChild(curr_child);
-    return curr_child->pid;
-  }
+	while(curr_child != NULL) {
+  	if (curr_child->status == ZOMBIE) {
+    	console("join(): found zombie child\n");
+			curr_child->status = QUIT;
+			*code = curr_child->status;
+			int child_pid = curr_child->pid;
+			removeChild(curr_child);
+			init_process(curr_child->pid % MAXPROC);
+    	return child_pid;
+  	}
+		else if (curr_child->status == ZAP_BLOCK) {
+			curr_child->status = READY;
+			insertRL(curr_child);
+			dispatcher();
+		}
+		curr_child = curr_child->next_sibling_ptr;
+	}
 
   //otherwise..
-  else {
-    if (DEBUG && debugflag) {
-      console("join(): children havent quit yet, ");
-      console("setting status of parent (%s) to JOINBLOCKED\n", Current->name);
-			console("join(): %s's kid: name- %s status- %d\n", Current->name, Current->child_proc_ptr->name);
-    }
-
-		Current->status = JOINBLOCKED;
-
-    removeRL(Current);
-		int child_pid = Current->child_proc_ptr->pid;
-    if (DEBUG && debugflag)
-			console("join(): process (%s) is calling dispatcher.\n", Current->name);
-
-		dispatcher();
-		*code = Current->child_status;
-    return child_pid;
+  if (DEBUG && debugflag) {
+    console("join(): children havent quit yet, ");
+    console("setting status of parent (%s) to JOIN_BLOCK\n", Current->name);
+		console("join(): %s's kid: name- %s status- %d\n", Current->name, Current->child_proc_ptr->name);
   }
 
-  return -1;
+	Current->status = JOIN_BLOCK;
+
+  removeRL(Current);
+	int child_pid = Current->child_proc_ptr->pid;
+  if (DEBUG && debugflag)
+		console("join(): process (%s) is calling dispatcher.\n", Current->name);
+
+	dispatcher();
+
+	//check if new Current process is zapped. Fixes a test case
+	if(is_zapped()) {
+    return -1;
+  }
+
+	*code = Current->child_status;
+  return child_pid;
+
 }
+
 
 
 /* ------------------------------------------------------------------------
@@ -712,17 +733,14 @@ int join(int * code) {
    Purpose - Stops the child process and notifies the parent of the death by
              putting child quit info on the parents child completion code
              list.
-   Parameters - the code to return to the grieving parent
-   Returns - nothing
-   Side Effects - changes the parent of pid child completion status list.
    ------------------------------------------------------------------------ */
 void quit(int code) {
   if (DEBUG && debugflag) console("quit(): started process (%s) pid: %d\n", Current->name, Current->pid);
-  check_mode();
+	disableInterrupts();
 
   proc_ptr walker_zappd, walker_child;
 
-  //if its zapped then that must mean that its parent is ZAPBLOCKED
+  //if its zapped then that must mean that its parent is ZAP_BLOCK
   if (is_zapped()) {
     if (DEBUG && debugflag) console("quit(): is_zapped() returns TRUE\n");
     walker_zappd = Current->next_zappd_ptr;
@@ -732,12 +750,13 @@ void quit(int code) {
       walker_zappd = walker_zappd->next_zappd_ptr;
     }
   }
+
   //check if process has active children
   if (Current->num_children > 0) {
     walker_child = Current->child_proc_ptr;
-    while (Current->num_children != 0) {
-      if (walker_child->status == ZOMBIE) {
-        if (DEBUG && debugflag) console("quit(): error - current process has children.\n");
+    while (Current->num_children > 0) {
+      if (walker_child->status == READY) {
+        console("quit(): process %d quit with active children\n", Current->pid);
         halt(1);
       }
       else if (walker_child->zapped) {
@@ -762,11 +781,12 @@ void quit(int code) {
 
     proc_ptr parent = Current->parent_ptr;
     //(1) check to see if parent is blocked
-    if (parent->status == JOINBLOCKED || parent->status == ZAPBLOCKED) {
+    if (parent->status == JOIN_BLOCK || parent->status == ZAP_BLOCK) {
       if (DEBUG && debugflag) console("quit(): %s's parent is blocked.\n", Current->name);
 			parent->status = READY;
 			insertRL(parent);
 			removeChild(Current);
+			init_process(Current->pid % MAXPROC);
 			parent->child_status = code;
 		}
     //(2) otherwise just mark it as a zombie
@@ -779,8 +799,10 @@ void quit(int code) {
 
   if (DEBUG && debugflag) console("quit(): process (%s) is calling dispatcher()\n", Current->name);
   dispatcher();
+	//may have to disable interrupts here again
 
-} /* quit */
+}
+
 
 
 /* ------------------------------------------------------------------------
@@ -789,30 +811,10 @@ void quit(int code) {
              priority (the first on the ready list) is scheduled to
              run.  The old process is swapped out and the new process
              swapped in.
-   Parameters - none
-   Returns - nothing
-   Side Effects - the context of the machine is changed
    ----------------------------------------------------------------------- */
 
 void dispatcher(void) {
    if (DEBUG && debugflag) console("dispatcher(): started.\n");
-   check_mode();
-
-	 //not sure where to put this
- 	for (int i=0; i<MAXPROC; i++) {
- 		if (i == 1) continue;
- 		else if (ProcTable[i].status == QUIT)  {
-			if (DEBUG && debugflag) console("dispatcher(): found process that quit. clearing\n");
-			init_process(i);
-		}
-		else if (ProcTable[i].status == ZOMBIE) {
-			if (ProcTable[(ProcTable[i].parent_ptr->pid)%MAXPROC].pid == -1) {
-				if (DEBUG && debugflag) console("dispatcher(): zombie child's parent has quit. clearing child.\n");
-				init_process(i);
-			}
-		}
-	}
-
    if (DEBUG && debugflag) console("dispatcher(): context switching.\n");
 
 
@@ -824,12 +826,10 @@ void dispatcher(void) {
      Current->start_time = get_current_time();
      Current->status = RUNNING;
      if (DEBUG && debugflag) console("dispatcher(): starting %s()\n", Current->name);
+		 enableInterrupts();
      context_switch(NULL, &Current->state);
    }
-	//else if (Current->status == ZAPBLOCKED) {
-	//	 old_process = Current;
-	//	 Current = Current->child_proc_ptr;
-	// }
+
    else  {
   	old_process = Current;
     Current = ReadyList;
@@ -845,13 +845,13 @@ void dispatcher(void) {
     int cpu_time = (time_now - old_process->start_time)/1000;
     old_process->cpu_time = cpu_time;
 	}
-  else old_process->cpu_time = 0;
 
 	//p1_switch(old_process->pid, Current->pid);
   if (DEBUG && debugflag)
 		console("dispatcher()- old: %s(), pid: %d\tnew: %s(), pid: %d\n", old_process->name, old_process->pid, Current->name, Current->pid);
+	enableInterrupts();
   context_switch(&old_process->state, &Current->state);
-} /* dispatcher */
+}
 
 
 
@@ -861,13 +861,8 @@ void dispatcher(void) {
              responsibility is to keep the system going when all other
 	     processes are blocked.  The other is to detect and report
 	     simple deadlock states.
-   Parameters - none
-   Returns - nothing
-   Side Effects -  if system is in deadlock, print appropriate error
-		   and halt.
    ----------------------------------------------------------------------- */
 int sentinel (char * dummy) {
-
   if (DEBUG && debugflag) console("sentinel(): called\n");
 
   while (1) {
@@ -882,43 +877,38 @@ int sentinel (char * dummy) {
  * This just checks to see if there are still running processes
  */
 static void check_deadlock() {
-  int available_processes = 0;
+  int num_processes = 1;
 
   if (DEBUG && debugflag) console("check_deadlock(): called. process: %s\n", Current->name);
   for (int i=2; i<MAXPROC; i++) {
-    if (ProcTable[i].status != QUIT && ProcTable[i].status != NOT_STARTED) {
-      available_processes = 1;
+    if (ProcTable[i].status != QUIT && ProcTable[i].status != EMPTY) {
+      num_processes++;
     }
   }
 
-  if (available_processes) {
-    if (DEBUG && debugflag) console("check_deadlock(): there are processes still remaining\n");
-    return halt(1);
+  if (num_processes > 1) {
+    console("check_deadlock(): num_proc = %d\n", num_processes);
+		console("check_deadlock(): processes still present. Halting..\n");
+    halt(1);
   }
   else {
-    if (DEBUG && debugflag)
-      console("check_deadlock(): sentinel is only process remaining\n");
+    console("All processes completed\n");
     halt(0);
   }
 }
 
-   /* ------------------------------------------------------------------------
-      Name - dump_processes
-      Purpose - Print process information to the console.
-   		For each PCB in the process:
-   			-table print (at a minimum) its PID
-   			-parent’s PID
-   			-priority
-   			-process status (e.g. unused,running, ready, blocked, etc.)
-   			-# of children
-   			-CPU time consumed
-   			-name
-
-      Parameters - none
-      Returns - nothing
-      Side Effects -  ????
-
-      ----------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------
+  Name - dump_processes
+  Purpose - Print process information to the console.
+		For each PCB in the process:
+			-table print (at a minimum) its PID
+			-parent’s PID
+			-priority
+			-process status (e.g. unused,running, ready, blocked, etc.)
+			-# of children
+			-CPU time consumed
+			-name
+----------------------------------------------------------------------- */
 
 void dump_processes(void) {
   if (DEBUG && debugflag) {
@@ -926,20 +916,19 @@ void dump_processes(void) {
   }
 
   //output running procs based on a valid PID
-	console("PID\t\tPRIORITY\tSTATUS\t\t\t# KIDS\t\tCPU TIME\tNAME\n");
+	console("PID\t\tPRIORITY\tSTATUS\t\t# KIDS\t\tCPU TIME\tNAME\n");
   for (int i=0; i < MAXPROC; i++){
    	console("%d\t\t",ProcTable[i].pid);
    	console("%d\t\t",ProcTable[i].priority);
-   	if(ProcTable[i].status == QUIT) console("QUIT\t\t\t");
-   	else if(ProcTable[i].status == ZAPBLOCKED) console("ZAPBLOCKED\t\t\t");
-   	else if(ProcTable[i].status == READY) console("READY\t\t\t");
-   	else if(ProcTable[i].status == RUNNING) console("RUNNING\t\t\t");
-   	else if(ProcTable[i].status == ZOMBIE) console("ZOMBIE\t\t\t");
-   	else if(ProcTable[i].status == JOINBLOCKED) console("JOINBLOCKED\t\t");
-    else if (ProcTable[i].status == NOT_STARTED) console("NOT_STARTED\t\t");
+   	if(ProcTable[i].status == QUIT) console("QUIT\t\t");
+   	else if(ProcTable[i].status == ZAP_BLOCK) console("ZAP_BLOCK\t");
+   	else if(ProcTable[i].status == READY) console("READY\t\t");
+   	else if(ProcTable[i].status == RUNNING) console("RUNNING\t\t");
+   	else if(ProcTable[i].status == ZOMBIE) console("ZOMBIE\t\t");
+   	else if(ProcTable[i].status == JOIN_BLOCK) console("JOIN_BLOCK\t");
+    else if (ProcTable[i].status == EMPTY) console("EMPTY\t\t");
    	else {
-      console("\nINVALID STATUS, HALTING\n");
-   	  halt(1);
+      console("%d\t\t", ProcTable[i].status);
    	}
    	console("%d\t\t", ProcTable[i].num_children);
    	console("%dms\t\t",ProcTable[i].cpu_time);
@@ -947,4 +936,3 @@ void dump_processes(void) {
   }
 	console("\n");
 }
-/* dump_processes */
