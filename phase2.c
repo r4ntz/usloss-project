@@ -70,7 +70,7 @@ struct mail_slot {
 
 /* ------------------------- Prototypes ----------------------------------- */
 
-//Phase 2 Prototypes 
+//Phase 2 Prototypes
 
 int start1 (char *);
 extern int start2 (char *);
@@ -141,29 +141,47 @@ int start1(char *arg)
 
 /* ------------------------------------------------------------------------
    Name - MboxCreate
-   Purpose - gets a free mailbox from the table of mailboxes and initializes it 
+   Purpose - gets a free mailbox from the table of mailboxes and initializes it
    Parameters - maximum number of slots in the mailbox and the max size of a msg
                 sent to the mailbox.
    Returns - -1 to indicate that no mailbox was created, or a value >= 0 as the
              mailbox id.
-   Side Effects - initializes one element of the mail box array. 
+   Side Effects - initializes one element of the mail box array.
    ----------------------------------------------------------------------- */
 int MboxCreate(int slots, int slot_size)
 {
+  if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
+  check_kernel_mode();
+  disableInterrupts();
 	// First check if args are valid
-	if slot_size > || < || OR slots > || <
-		return -2
-	// Second, check if more Mboxes available
-	if array of structs is empty?
-		return -1
-	// Third, check for zero-slot mbox
+	if (slots < 0 || slot_size > MAXSLOTS)
+  {
+    if (DEBUG2 && debugflag2)
+      console("MboxCreate(): slot_size larger than MAXSLOTS and/or slots (no. of slots) is smaller than 0.\n");
+    enableInterrupts();
+		return -1;
+  }
+
+	// Check for empty slot and return mailbox id
 	// Sender will be blocked until a receiver collects the message or,
 	// the receiver will be blocked until the sender sends the message
-	
-	// Return ID of Mbox created
-	else
-		return ID of Mbox
-	
+	for (int i=0; i<MAXMBOX; i++)
+  {
+    if (MailBoxTable[i].status == EMPTY) {
+      if (DEBUG2 && debugflag2) console("MboxCreate(): found empty slot: %i.\n", i);
+      MailBoxTable[i].mbox_id = i;
+      MailBoxTable[i].num_slots = slots;
+      MailBoxTable[i].slot_size = slot_size;
+      MailBoxTable[i].status = BLOCKED;
+      enableInterrupts();
+      return MailBoxTable[i].mbox_id;
+    }
+  }
+  //Otherwise if there are no slots then return -1
+  if (DEBUG2 && debugflag2) console("MboxCreate(): no empty slots.\n");
+	enableInterrupts();
+  return -1;
+
 } /* MboxCreate */
 
 
@@ -182,20 +200,20 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	// First, check if args valid - THIS CAN BE A FUNCTION
 	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
 		return -1
-		
-		
-		
+
+
+
 	// End this function by blocking if no msg slot available
 	while no msg available
 		block_me()
-	
+
 } /* MboxSend */
 
 
 /* ------------------------------------------------------------------------
    Name - MboxCondSend
    Purpose - Conditionally send a message to a mailbox.
-		Do not block the invoking process. 
+		Do not block the invoking process.
    Parameters - mailbox id, pointer to data of msg, # of bytes in msg.
    Returns -
 		-3: process is zap’d.
@@ -203,11 +221,11 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 		-1: illegal values given as arguments.
 		0: message sent successfully.
 
-   Side Effects - 
+   Side Effects -
    ----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 {
-	
+
 } /* MboxCondSend */
 
 
@@ -229,11 +247,11 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
    ----------------------------------------------------------------------- */
 int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
-	
+
 	// End this function by blocking if no msg waiting
 	while no msg waiting
 		block_me()
-	
+
 } /* MboxReceive */
 
 
@@ -249,11 +267,11 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 		-2: mailbox full, message not sent; or no mailbox slots available in the system.
 		-1: illegal values given as arguments.
 		0: message sent successfully.
-	Side Effects - 
+	Side Effects -
    ----------------------------------------------------------------------- */
 int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
-	
+
 } /* MboxReceive */
 
 
@@ -270,11 +288,11 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size)
 		1: the mailboxID is not a mailbox that is in use.
 		0: successful completion.
 	Side Effects
-		
+
    ----------------------------------------------------------------------- */
 int MboxRelease(int mbox_id)
 {
-	
+
 } /* MboxReceive */
 
 
@@ -297,47 +315,10 @@ int MboxCheck (int mbox_id, void *msg_ptr, int msg_size)
 	if (msg_size <0 || msg_size >MAX_MESSAGE) // can be zero-max len
 		if (DEBUG2 && debugflag2)
 			console("Mailbox Error: Invalid Mbox size of %d\n", msg_size);
-		
+
 		return -1
-		
-		
+
+
 	// Determined to be valid by negation
 	return 0
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

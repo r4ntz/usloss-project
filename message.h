@@ -1,11 +1,17 @@
 #define DEBUG2 1
 
+#define EMPTY 0
+#define BLOCKED 1
+
 typedef struct mail_slot *slot_ptr;
 typedef struct mailbox mail_box;
 typedef struct mbox_proc *mbox_proc_ptr;
 
 struct mailbox {
    int           mbox_id;
+   int           status;
+   int           num_slots;
+   int           slot_size;
    /* other items as needed... */
 };
 
