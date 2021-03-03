@@ -10,8 +10,8 @@ typedef struct mbox_proc *mbox_proc_ptr;
 struct mailbox {
    int           mbox_id;
    int           status;
-   int           num_slots;
-   int           slot_size;
+   int           num_slots; //max number of slots
+   int           slot_size; //max size of message in slot
    /* other items as needed... */
 };
 
