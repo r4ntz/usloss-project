@@ -1,7 +1,9 @@
 #define DEBUG2 1
 
-#define EMPTY 0
-#define BLOCKED 1
+#define EMPTY    0
+#define READY    1
+#define FULL     2
+#define RELEASE  3
 
 typedef struct mail_slot *slot_ptr;
 typedef struct mailbox mail_box;
@@ -12,12 +14,17 @@ struct mailbox {
    int           status;
    int           num_slots; //max number of slots
    int           slot_size; //max size of message in slot
+   slot_ptr      slot_queue;
    /* other items as needed... */
 };
 
 struct mail_slot {
-   int       mbox_id;
-   int       status;
+  int       slot_id;
+  char      message[MAX_MESSAGE];
+  int       message_size;
+  slot_ptr  next_slot_ptr;
+  int       mbox_id;
+  int       status;
    /* other items as needed... */
 };
 

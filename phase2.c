@@ -21,42 +21,6 @@ Notes and Ideas
 	Phase 1 functions available
 		fork1, join, quit, zap, is zapped, getpid, dump processes, block me, unblock proc, read cur start time, and time slice
 
-
-Notes from a post:
-
-typedef enum
-{
-   INIT = 0, //initialized
-   AVAILABLE, //created, available for use
-   FULL, //for blocking?
-   RELEASE //MboxRelease requirement
-} mailbox_status;
-
-typedef struct mail_slot *slot_ptr;
-typedef struct mailbox mail_box;
-typedef struct mbox_proc *mbox_proc_ptr;
-
-struct mailbox
-{
-   int      mbox_id;
-   /* other items as needed...
-   int      slots; // number of slots of mailbox
-   int      slots_full;    // number of slots being used
-   slot_ptr slot_que;   // linked list containing location of slots for mailbox
-   mailbox_status      status;  // status of mailbox?
-   int      slot_size;  // size of slot in mailbox
-};
-
-struct mail_slot {
-   int      mbox_id; //id of mailbox where slot lives
-   int      status;  //full, empty, avail
-   // other items as needed...
-   int      slot_id; //id associated with slot (0,1,2...)
-   char     message[MAX_MESSAGE]; //message stored in slot
-   int      message_size; //size of slot
-   slot_ptr next_slot; //next slot in mailbox of id mbox_id
-
-
 ------------------------------------------------------------------------ */
 
 
@@ -73,9 +37,15 @@ struct mail_slot {
 //Phase 2 Prototypes
 
 int start1 (char *);
+int MboxCreate(int slots, int slot_size);
+int MboxSend(int mbox_id, void *msg_ptr, int msg_size);
+int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size);
+int MboxReceive(int mbox_id, void *msg_ptr, int msg_size);
+int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size);
+int MboxRelease(int mbox_id);
+int MboxCheck (int mbox_id, void *msg_ptr, int msg_size);
 extern int start2 (char *);
-
-
+extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 
 //Phase 1 functions
 extern int fork1(char *name, int (*func)(char *), char *arg, int stacksize, int priority);
@@ -97,9 +67,63 @@ int debugflag2 = 1;
 
 /* the mail boxes */
 mail_box MailBoxTable[MAXMBOX];
+mail_slot SlotTable[MAXSLOTS];
 
 
 /* -------------------------- Functions ----------------------------------- */
+
+/* ------------------------------------------------------------------------
+   Name - clock_handler2
+   Purpose - I'm guessing same as clock_handler from phase1. Don't know yet
+   Parameters - Same as clock_handler from phase1
+   Returns - Nothing
+   Side Effects - None
+   ----------------------------------------------------------------------- */
+void clock_handler2(int dev, void * unit)
+{
+	if (DEBUG && debugflag) console("clock_handler(): started.\n");
+	time_slice();
+
+} /* clock_handler2 */
+
+
+
+/* ------------------------------------------------------------------------
+   Name - init_mailbox
+   Purpose - Sets default values for mailbox. Called by start1
+   Parameters - mailbox id used to index into it
+   Returns - Nothing
+   Side Effects - Erases any previously set attributes if called again
+   ----------------------------------------------------------------------- */
+void init_mailbox(int id)
+{
+  MailBoxTable[id].mbox_id = id;
+  MailBoxTable[id].status = EMPTY;
+  MailBoxTable[id].num_slots = -1;
+  MailBoxTable[id].slot_size = -1;
+  //add any other attributes we may add later
+
+} /* init_mailbox */
+
+
+
+/* ------------------------------------------------------------------------
+   Name - init_slot
+   Purpose - Sets default values for slot in SlotTable
+   Parameters - index for the SlotTable array
+   Returns - Nothing
+   Side Effects - Erases any previously set attributes if called again
+   ----------------------------------------------------------------------- */
+void init_slot(int index)
+{
+  SlotTable[index].slot_id = -1;
+  MailBoxTable[index].status = EMPTY;
+  MailBoxTable[index].next_slot_ptr = NULL;
+  //add any other attributes we may add later
+
+} /* init_slot */
+
+
 
 /* ------------------------------------------------------------------------
    Name - start1
@@ -111,29 +135,39 @@ mail_box MailBoxTable[MAXMBOX];
    ----------------------------------------------------------------------- */
 int start1(char *arg)
 {
-   if (DEBUG2 && debugflag2)
-      console("start1(): at beginning\n");
+  if (DEBUG2 && debugflag2)
+    console("start1(): at beginning\n");
 
-   check_kernel_mode("start1");
+  check_kernel_mode("start1");
 
-   /* Disable interrupts */
-   disableInterrupts();
+  /* Disable interrupts */
+  disableInterrupts();
 
-   /* Initialize the mail box table, slots, & other data structures.
-    * Initialize int_vec and sys_vec, allocate mailboxes for interrupt
-    * handlers.  Etc... */
+  /* Initialize the mail box table, slots, & other data structures. */
+  int i;
+  for (i=0; i < MAXMBOX; i++)
+  {
+   init_mailbox(i);
+  }
+  for (i=0; i < MAXSLOTS; i++)
+  {
+    init_slot(i);
+  }
+  /* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
+  *  handlers.  Etc... */
+  int_vec[CLOCK_DEV] = clock_handler2;
 
-   enableInterrupts();
+  enableInterrupts();
 
-   /* Create a process for start2, then block on a join until start2 quits */
-   if (DEBUG2 && debugflag2)
-      console("start1(): fork'ing start2 process\n");
-   kid_pid = fork1("start2", start2, NULL, 4 * USLOSS_MIN_STACK, 1);
-   if ( join(&status) != kid_pid ) {
-      console("start2(): join returned something other than start2's pid\n");
-   }
+  /* Create a process for start2, then block on a join until start2 quits */
+  if (DEBUG2 && debugflag2)
+    console("start1(): fork'ing start2 process\n");
+  kid_pid = fork1("start2", start2, NULL, 4 * USLOSS_MIN_STACK, 1);
+  if ( join(&status) != kid_pid ) {
+    console("start2(): join returned something other than start2's pid\n");
+  }
 
-   return 0;
+  return 0;
 } /* start1 */
 
 
