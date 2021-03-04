@@ -81,7 +81,7 @@ mail_slot SlotTable[MAXSLOTS];
    ----------------------------------------------------------------------- */
 void clock_handler2(int dev, void * unit)
 {
-	if (DEBUG && debugflag) console("clock_handler(): started.\n");
+	if (DEBUG2 && debugflag2) console("clock_handler2(): started.\n");
 	time_slice();
 
 } /* clock_handler2 */
