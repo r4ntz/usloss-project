@@ -13,6 +13,9 @@
 --------------------------------
 Notes and Ideas
 
+	Do we need to place send/receive operations in a while loop to determine they are following FIFO?
+
+
 	Items to add to the mailbox struct in message.h?
 		Calling process PID
 		Calling process PRI
@@ -135,39 +138,39 @@ void init_slot(int index)
    ----------------------------------------------------------------------- */
 int start1(char *arg)
 {
-  if (DEBUG2 && debugflag2)
-    console("start1(): at beginning\n");
+	if (DEBUG2 && debugflag2)
+		console("start1(): at beginning\n");
 
-  check_kernel_mode("start1");
+	check_kernel_mode("start1");
 
-  /* Disable interrupts */
-  disableInterrupts();
+	/* Disable interrupts */
+	disableInterrupts();
 
-  /* Initialize the mail box table, slots, & other data structures. */
-  int i;
-  for (i=0; i < MAXMBOX; i++)
-  {
-   init_mailbox(i);
-  }
-  for (i=0; i < MAXSLOTS; i++)
-  {
-    init_slot(i);
-  }
-  /* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
-  *  handlers.  Etc... */
-  int_vec[CLOCK_DEV] = clock_handler2;
+	/* Initialize the mail box table, slots, & other data structures. */
+	int i;
+	for (i=0; i < MAXMBOX; i++)
+	{
+		init_mailbox(i);
+	}
+	for (i=0; i < MAXSLOTS; i++)
+	{
+		init_slot(i);
+	}
+	/* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
+	*  handlers.  Etc... */
+	int_vec[CLOCK_DEV] = clock_handler2;
 
-  enableInterrupts();
+	enableInterrupts();
 
-  /* Create a process for start2, then block on a join until start2 quits */
-  if (DEBUG2 && debugflag2)
-    console("start1(): fork'ing start2 process\n");
-  kid_pid = fork1("start2", start2, NULL, 4 * USLOSS_MIN_STACK, 1);
-  if ( join(&status) != kid_pid ) {
-    console("start2(): join returned something other than start2's pid\n");
-  }
+	/* Create a process for start2, then block on a join until start2 quits */
+	if (DEBUG2 && debugflag2)
+	console("start1(): fork'ing start2 process\n");
+	kid_pid = fork1("start2", start2, NULL, 4 * USLOSS_MIN_STACK, 1);
+	if ( join(&status) != kid_pid ) {
+	console("start2(): join returned something other than start2's pid\n");
+	}
 
-  return 0;
+	return 0;
 } /* start1 */
 
 
@@ -184,41 +187,39 @@ int start1(char *arg)
    ----------------------------------------------------------------------- */
 int MboxCreate(int slots, int slot_size)
 {
-  if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
-  check_kernel_mode();
-  disableInterrupts();
+	if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
+	check_kernel_mode();
+	disableInterrupts();
 	// First check if args are valid
 	if (slots < 0 || slot_size > MAXSLOTS)
-  {
-    if (DEBUG2 && debugflag2)
-      console("MboxCreate(): slot_size larger than MAXSLOTS and/or slots (no. of slots) is smaller than 0.\n");
-    enableInterrupts();
+	{
+		if (DEBUG2 && debugflag2)
+			console("MboxCreate(): slot_size larger than MAXSLOTS and/or slots (no. of slots) is smaller than 0.\n");
+		enableInterrupts();
 		return -1;
-  }
+	}
 
 	// Check for empty slot and return mailbox id
 	// Sender will be blocked until a receiver collects the message or,
 	// the receiver will be blocked until the sender sends the message
 	for (int i=0; i<MAXMBOX; i++)
-  {
-    if (MailBoxTable[i].status == EMPTY) {
-      if (DEBUG2 && debugflag2) console("MboxCreate(): found empty slot: %i.\n", i);
-      MailBoxTable[i].mbox_id = i;
-      MailBoxTable[i].num_slots = slots;
-      MailBoxTable[i].slot_size = slot_size;
-      MailBoxTable[i].status = BLOCKED;
-      enableInterrupts();
-      return MailBoxTable[i].mbox_id;
-    }
-  }
-  //Otherwise if there are no slots then return -1
-  if (DEBUG2 && debugflag2) console("MboxCreate(): no empty slots.\n");
+	{
+		if (MailBoxTable[i].status == EMPTY)
+		{
+			if (DEBUG2 && debugflag2) console("MboxCreate(): found empty slot: %i.\n", i);
+			MailBoxTable[i].mbox_id = i;
+			MailBoxTable[i].num_slots = slots;
+			MailBoxTable[i].slot_size = slot_size;
+			MailBoxTable[i].status = BLOCKED;
+			enableInterrupts();
+			return MailBoxTable[i].mbox_id;
+		}
+	}
+	//Otherwise if there are no slots then return -1
+	if (DEBUG2 && debugflag2) console("MboxCreate(): no empty slots.\n");
 	enableInterrupts();
-  return -1;
-
+	return -1;
 } /* MboxCreate */
-
-
 
 
 /* ------------------------------------------------------------------------
@@ -233,33 +234,50 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 {
 	// First, check if args valid - THIS CAN BE A FUNCTION
 	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
-		return -1
-
+		return -1;
 
 
 	// End this function by blocking if no msg slot available
 	while no msg available
-		block_me()
+		block_me();
 
 } /* MboxSend */
 
 
 /* ------------------------------------------------------------------------
-   Name - MboxCondSend
-   Purpose - Conditionally send a message to a mailbox.
+	Name
+		MboxCondSend
+	Purpose
+		Conditionally send a message to a mailbox.
 		Do not block the invoking process.
-   Parameters - mailbox id, pointer to data of msg, # of bytes in msg.
-   Returns -
+	Parameters
+		mailbox id, pointer to data of msg, # of bytes in msg.
+	Returns
 		-3: process is zap’d.
 		-2: mailbox full, message not sent; or no mailbox slots available in the system.
 		-1: illegal values given as arguments.
 		0: message sent successfully.
 
-   Side Effects -
-   ----------------------------------------------------------------------- */
+	Side Effects
+		none determined at this point
+
+	Notes from lecture
+		Does not block because we do not want to block the interrupt handler.
+		
+----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 {
-
+	if (DEBUG2 && debugflag2) console("MboxCondSend(): Conditionally sending.\n");
+	// First, check if args valid - THIS CAN BE A FUNCTION - MboxCheck?
+	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
+		return -1;
+	// Second, validate mbox full/no slots available
+	else if (slots < 0 || slot_size > MAXSLOTS)
+		return -2;
+	// Third, send message
+	else
+		send message?
+		return 0;
 } /* MboxCondSend */
 
 
@@ -277,14 +295,14 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 		-1: the mailboxID is not a mailbox that is in use.
 		0: successful
 	Side Effects
-		none?
+		None known
    ----------------------------------------------------------------------- */
 int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
 
 	// End this function by blocking if no msg waiting
 	while no msg waiting
-		block_me()
+		block_me();
 
 } /* MboxReceive */
 
@@ -301,7 +319,8 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 		-2: mailbox full, message not sent; or no mailbox slots available in the system.
 		-1: illegal values given as arguments.
 		0: message sent successfully.
-	Side Effects -
+	Side Effects
+		None known
    ----------------------------------------------------------------------- */
 int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
@@ -330,6 +349,26 @@ int MboxRelease(int mbox_id)
 } /* MboxReceive */
 
 
+/* ------------------------------------------------------------------------
+	Name
+		WaitDevice
+	Purpose
+		Do a receive operation on the mbox associated with the unit of the type
+	Parameters
+		
+	Returns
+		-1: the proc was zapped while waiting
+		0: successful completion.
+	Side Effects
+
+   ----------------------------------------------------------------------- */
+int waitdevice(int type, int unit, int *status)
+{
+
+} /* WaitDevice */
+
+
+
 
 
 // Validates int mbox_id, *msg_ptr, msg_size valid args
@@ -356,3 +395,13 @@ int MboxCheck (int mbox_id, void *msg_ptr, int msg_size)
 	// Determined to be valid by negation
 	return 0
 }
+
+
+
+
+
+
+
+
+
+
