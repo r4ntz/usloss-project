@@ -13,8 +13,17 @@
 --------------------------------
 Notes and Ideas
 
+	Blocking & Unblocking
+		IF proc A is blocked from sending because mbox is full
+		THEN receive operation should unblock A
+		
+		IF proc B receives empty msg from mbox and is blocked
+		THEN unblocking B should be fone by send operation to mbox
+
+
 	Do we need to place send/receive operations in a while loop to determine they are following FIFO?
 
+	Testing for kernel mode must be done on 100% of functions.
 
 	Items to add to the mailbox struct in message.h?
 		Calling process PID
@@ -177,14 +186,24 @@ int start1(char *arg)
 
 
 /* ------------------------------------------------------------------------
-   Name - MboxCreate
-   Purpose - gets a free mailbox from the table of mailboxes and initializes it
-   Parameters - maximum number of slots in the mailbox and the max size of a msg
-                sent to the mailbox.
-   Returns - -1 to indicate that no mailbox was created, or a value >= 0 as the
-             mailbox id.
-   Side Effects - initializes one element of the mail box array.
-   ----------------------------------------------------------------------- */
+Name
+	MboxCreate
+Purpose
+	Gets a free mailbox from the table of mailboxes and initializes it
+Parameters
+	Maximum number of slots in the mailbox and the max size of a msg
+	sent to the mailbox.
+Returns
+	-1 to indicate that no mailbox was created
+	>=0 as the mailbox id
+Side Effects - initializes one element of the mail box array.
+
+-------------------
+
+	(a) Allocate and initialize a location in your mailbox array. MAXMBOX from phase2.h is the size of this array.
+	(b) Do not allocate slots. They are allocated only as needed to hold messages.
+
+----------------------------------------------------------------------- */
 int MboxCreate(int slots, int slot_size)
 {
 	if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
@@ -223,19 +242,39 @@ int MboxCreate(int slots, int slot_size)
 
 
 /* ------------------------------------------------------------------------
-   Name - MboxSend
-   Purpose - Put a message into a slot for the indicated mailbox.
-             Block the sending process if no slot available.
-   Parameters - mailbox id, pointer to data of msg, # of bytes in msg.
-   Returns - zero if successful, -1 if invalid args.
-   Side Effects - none.
-   ----------------------------------------------------------------------- */
+	Name
+		MboxSend
+	Purpose
+		Put a message into a slot for the indicated mailbox.
+		Block the sending process if no slot available.
+	Parameters
+		mailbox id, pointer to data of msg, # of bytes in msg.
+	Returns
+		-1 if invalid args
+		0 if successful
+	Side Effects
+		None Known
+
+-------------------
+
+
+
+----------------------------------------------------------------------- */
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 {
 	// First, check if args valid - THIS CAN BE A FUNCTION
+	// Also need to validate that mbox_id is not only a possible vlaue
+	// but also an active mailbox
 	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
 		return -1;
 
+/*	SECOND STEP
+	If slot is available in this mailbox, allocate a slot
+	from your mail slot table. MAXSLOTS determines the size
+	of the mail slot array. MAX MESSAGE determines the max
+	number of bytes that can be held in the slot.
+	-If mail slot overflows, shoult halt USLOSS_MIN_STACK
+*/
 
 	// End this function by blocking if no msg slot available
 	while no msg available
@@ -254,7 +293,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 		mailbox id, pointer to data of msg, # of bytes in msg.
 	Returns
 		-3: process is zap’d.
-		-2: mailbox full, message not sent; or no mailbox slots available in the system.
+		-2: mailbox full, message not sent; or no mbox slots available in the system.
 		-1: illegal values given as arguments.
 		0: message sent successfully.
 
@@ -263,6 +302,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 
 	Notes from lecture
 		Does not block because we do not want to block the interrupt handler.
+		
+	Mail slot table overflow does not halt USLOSS. Return -2 in this case.
 		
 ----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
