@@ -16,7 +16,7 @@ Notes and Ideas
 	Blocking & Unblocking
 		IF proc A is blocked from sending because mbox is full
 		THEN receive operation should unblock A
-		
+
 		IF proc B receives empty msg from mbox and is blocked
 		THEN unblocking B should be fone by send operation to mbox
 
@@ -56,6 +56,9 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size);
 int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size);
 int MboxRelease(int mbox_id);
 int MboxCheck (int mbox_id, void *msg_ptr, int msg_size);
+void clock_handler2(int, void *);
+void disk_handler(int, long);
+void term_handler(int, long);
 extern int start2 (char *);
 extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 
@@ -71,32 +74,144 @@ extern int block_me(int block_status);
 extern int unblock_proc(int pid);
 extern int read_cur_start_time(void);
 extern void time_slice(void);
-
+extern void check_kernel_mode(char *);
+extern void enableInterrupts(void);
+extern void disableInterrupts(void);
 
 /* -------------------------- Globals ------------------------------------- */
 
 int debugflag2 = 1;
+int clock_intervals = 0;
 
 /* the mail boxes */
 mail_box MailBoxTable[MAXMBOX];
 mail_slot SlotTable[MAXSLOTS];
 
+/* system call vector */
+void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
 /* -------------------------- Functions ----------------------------------- */
 
 /* ------------------------------------------------------------------------
    Name - clock_handler2
-   Purpose - I'm guessing same as clock_handler from phase1. Don't know yet
-   Parameters - Same as clock_handler from phase1
+   Purpose - Conditionally send contents of status register to mailbox
+   Parameters - dev, unit
    Returns - Nothing
    Side Effects - None
    ----------------------------------------------------------------------- */
 void clock_handler2(int dev, void * unit)
 {
 	if (DEBUG2 && debugflag2) console("clock_handler2(): started.\n");
+	disableInterrupts();
+
+	/* check to make sure right values were passed */
+	if (dev != CLOCK_INT)
+	{
+		if (DEBUG2 && debugflag2)
+		{
+			console("clock_handler2(): wrong device\n");
+		}
+		halt(1);
+	}
+
+	/* otherwise conditionally send contents of status register */
+	int status;
+
+	if (++clock_intervals >= 5)
+	{
+		int ret = device_input(dev, 0, &status);
+		if (ret == DEV_INVALID)
+		{
+			if (DEBUG2 && debugflag2)
+			{
+				console("clock_handler2(): dev or unit is invalid\n");
+			}
+			halt(1);
+		}
+
+		MboxCondSend(0, &status, sizeof(int));
+		clock_intervals = 0;
+	}
+
 	time_slice();
+	enableInterrupts();
 
 } /* clock_handler2 */
+
+/* ------------------------------------------------------------------------
+   Name - disk_handler
+   Purpose - Pretty much same as clock_handler2 minus the time_slice
+   Parameters - dev, unit
+   Returns - Nothing
+   Side Effects - None
+   ----------------------------------------------------------------------- */
+void disk_handler(int dev, long unit)
+{
+	if (DEBUG2 && debugflag2) console("disk_handler(): started.\n");
+	check_kernel_mode("disk_handler");
+	disableInterrupts();
+
+	if (dev != DISK_DEV)
+	{
+		if (DEBUG2 && debugflag2)
+		{
+			console("disk_handler(): wrong device\n");
+		}
+		halt(1);
+	}
+
+	int status;
+	int mbox_id = unit + 1;
+	int ret = device_input(dev, unit, &status);
+	if (ret == DEV_INVALID)
+	{
+		if (DEBUG2 && debugflag2)
+		{
+			console("disk_handler(): dev or unit is invalid\n");
+		}
+		halt(1);
+	}
+	MboxCondSend(mbox_id, &status, sizeof(int));
+	enableInterrupts();
+} /* disk_handler */
+
+
+/* ------------------------------------------------------------------------
+   Name - term_handler
+   Purpose - Pretty much same as clock_handler2 minus the time_slice
+   Parameters - dev, unit
+   Returns - Nothing
+   Side Effects - None
+   ----------------------------------------------------------------------- */
+void term_handler(int dev, long unit)
+{
+	if (DEBUG2 && debugflag2) console("term_handler(): started.\n");
+	check_kernel_mode("term_handler");
+	disableInterrupts();
+
+	if (dev != TERM_DEV)
+	{
+		if (DEBUG && debugflag2)
+		{
+			console("term_handler(): wrong device\n");
+		}
+		halt(1);
+	}
+
+	int status;
+	int mbox_id = unit + 3;
+	int ret = device_input(dev, unit, &status);
+	if (ret == DEV_INVALID)
+	{
+		if (DEBUG2 && debugflag2)
+		{
+			console("term_handler(): dev or unit is invalid\n");
+		}
+		halt(1);
+	}
+	MboxCondSend(mbox_id, &status, sizeof(int));
+	enableInterrupts();
+} /* term_handler */
 
 
 
@@ -161,13 +276,26 @@ int start1(char *arg)
 	{
 		init_mailbox(i);
 	}
+
+	/* Need to create zero-slot IO mboxes for clock, terminals and disks
+	 * 1 for clock, 4 for terminal, 2 for disk devices
+	 */
+	for (i=0; i < 7; i++)
+	{
+			MboxCreate(0, 0);
+	}
+
+	/* Initializing all the slots */
 	for (i=0; i < MAXSLOTS; i++)
 	{
 		init_slot(i);
 	}
+
 	/* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
 	*  handlers.  Etc... */
 	int_vec[CLOCK_DEV] = clock_handler2;
+	int_vec[DISK_DEV] = disk_handler;
+	int_vec[TERM_DEV] = term_handler;
 
 	enableInterrupts();
 
@@ -207,7 +335,7 @@ Side Effects - initializes one element of the mail box array.
 int MboxCreate(int slots, int slot_size)
 {
 	if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
-	check_kernel_mode();
+	check_kernel_mode("MboxCreate");
 	disableInterrupts();
 	// First check if args are valid
 	if (slots < 0 || slot_size > MAXSLOTS)
@@ -302,9 +430,9 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 
 	Notes from lecture
 		Does not block because we do not want to block the interrupt handler.
-		
+
 	Mail slot table overflow does not halt USLOSS. Return -2 in this case.
-		
+
 ----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 {
@@ -396,7 +524,7 @@ int MboxRelease(int mbox_id)
 	Purpose
 		Do a receive operation on the mbox associated with the unit of the type
 	Parameters
-		
+
 	Returns
 		-1: the proc was zapped while waiting
 		0: successful completion.
@@ -436,13 +564,3 @@ int MboxCheck (int mbox_id, void *msg_ptr, int msg_size)
 	// Determined to be valid by negation
 	return 0
 }
-
-
-
-
-
-
-
-
-
-
