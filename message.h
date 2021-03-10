@@ -1,9 +1,12 @@
-#define DEBUG2 1
+#define DEBUG2 	1
 
-#define EMPTY    0
-#define READY    1
-#define FULL     2
-#define RELEASE  3
+#define EMPTY		0
+#define USED		1
+#define ACTIVE	1
+#define FAILED  2
+
+#define SEND_BLOCKED 11;
+#define RECEIVE_BLOCKED 12;
 
 typedef struct mail_slot *slot_ptr;
 typedef struct mailbox mail_box;
@@ -15,7 +18,10 @@ struct mailbox
 	int           status;
 	int           num_slots; //max number of slots
 	int           slot_size; //max size of message in slot
+	int           slots_used;
 	slot_ptr      slot_queue;
+	mbox_proc_ptr	block_send_queue;
+	mbox_proc_ptr	block_receive_queue;
 	/* other items as needed... */
 };
 
@@ -48,14 +54,20 @@ struct psr_bits
  Maintain processes that are blocked on the same mailbox.
  Therefore, you need provide pointers to build lists
  in your phase 2 process data structure.
- 
+
  Can use MAXPROC for the size of the phase 2 process table
- 
+
   getpid()%MAXPROC to determine which slot in your phase 2 process table to use.
 */
 
 struct mbox_proc {
-	
+	short pid;
+	int status;
+	void * message;
+	int msg_size;
+	int mbox_released;
+	mbox_proc_ptr next_block_send;
+	mbox_proc_ptr next_block_receive;
 }
 
 union psr_values {

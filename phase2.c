@@ -87,6 +87,9 @@ int clock_intervals = 0;
 mail_box MailBoxTable[MAXMBOX];
 mail_slot SlotTable[MAXSLOTS];
 
+/* proc table */
+mbox_proc MboxProcTable[MAXPROC];
+
 /* system call vector */
 void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
@@ -253,6 +256,69 @@ void init_slot(int index)
 
 
 /* ------------------------------------------------------------------------
+   Name - set_slot
+   Purpose - Sets attributes of specific slot in our slot table
+   Parameters - index for the SlotTable array
+   Returns - Slot pointer pointing to slot we were editing
+   Side Effects - Erases any previously set attributes if called again
+   ----------------------------------------------------------------------- */
+slot_ptr set_slot(int index, int mbox_id, void * msg, int msg_size)
+{
+	SlotTable[index].mbox_id = mbox_id;
+	SlotTable[index].status = USED;
+	memcpy(SlotTable[index].message, msg_ptr, msg_size);
+	SlotTable[index].msg_size = msg_size;
+	return &SlotTable[index];
+} /* set_slot */
+
+
+/* ------------------------------------------------------------------------
+   Name - insert_slot
+   Purpose - Insert slot pointer into slot queue inside mailbox object
+   Parameters - the slot pointer and the mailbox we are going to insert into
+   Returns - number of slots currently used
+   Side Effects - ???
+   ----------------------------------------------------------------------- */
+int insert_slot(slot_ptr add_this, mbox_ptr some_mailbox)
+{
+			slot_ptr head = some_mailbox->slot_queue;
+			if (head == NULL)
+			{
+				some_mailbox->slot_queue = add_this;
+			}
+			else
+			{
+				while (head->next_slot_ptr != NULL)
+				{
+					head = head->next_slot_ptr;
+				}
+				head->next_slot_ptr = add_this;
+
+			}
+			return ++some_mailbox->slots_used;
+
+} /* insert_slot */
+
+
+/* ------------------------------------------------------------------------
+   Name - find_empty_slot
+   Purpose - Finds empty slot in slot table
+   Parameters - None
+   Returns - index to empty slot in slot table
+   Side Effects - ???
+   ----------------------------------------------------------------------- */
+int find_empty_slot()
+{
+	for (int i=0; i < MAXSLOTS; i++)
+	{
+		if (SlotTable[i].status == EMPTY) return i;
+	}
+	return -2;
+} /* find_empty_slot */
+
+
+
+/* ------------------------------------------------------------------------
    Name - start1
    Purpose - Initializes mailboxes and interrupt vector.
              Start the phase2 test process.
@@ -334,9 +400,10 @@ Side Effects - initializes one element of the mail box array.
 ----------------------------------------------------------------------- */
 int MboxCreate(int slots, int slot_size)
 {
-	if (DEBUG2 && debugflag2) console("MboxCreate(): called.\n");
+	if (DEBUG2 && debugflag2) console("MboxCreate(): started.\n");
 	check_kernel_mode("MboxCreate");
 	disableInterrupts();
+
 	// First check if args are valid
 	if (slots < 0 || slot_size > MAXSLOTS)
 	{
@@ -390,24 +457,113 @@ int MboxCreate(int slots, int slot_size)
 ----------------------------------------------------------------------- */
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 {
-	// First, check if args valid - THIS CAN BE A FUNCTION
-	// Also need to validate that mbox_id is not only a possible vlaue
-	// but also an active mailbox
-	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
+	if (DEBUG2 && debugflag2) console("MboxSend(): started.\n");
+	check_kernel_mode("MboxSend");
+	disableInterrupts();
+
+	/* First, check if args valid - THIS CAN BE A FUNCTION */
+	if (MailBoxTable[mbox_id].status == EMPTY)
+	{
+		enableInterrupts();
 		return -1;
+	}
 
-/*	SECOND STEP
-	If slot is available in this mailbox, allocate a slot
-	from your mail slot table. MAXSLOTS determines the size
-	of the mail slot array. MAX MESSAGE determines the max
-	number of bytes that can be held in the slot.
-	-If mail slot overflows, shoult halt USLOSS_MIN_STACK
-*/
+	//make sure that the ID is valid
+	if (mbox_id > MAXMBOX || mbox_id < 0)
+	{
+		enableInterrupts();
+		return -1;
+	}
 
-	// End this function by blocking if no msg slot available
-	while no msg available
-		block_me();
+	//check msg_size and compare with slot_size that was set
+	mbox_proc_ptr mbox_ptr = &MailBoxTable[mbox_id];
+	if (mbox_ptr->num_slots != 0 && msg_size > mbox_ptr->slot_size)
+	{
+		enableInterrupts();
+		return -1;
+	}
 
+	int pid = getpid();
+	MboxProcTable[pid%MAXPROC].pid = pid;
+	MboxProcTable[pid%MAXPROC].status = ACTIVE;
+	MboxProcTable[pid%MAXPROC].message = msg_ptr;
+	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+
+	/* If there are no other blocked receive processes in our queue and no empty slots
+	 * available, then add to send queue and block. check to make sure process
+	 * hasn't been released.
+	 */
+	if (mbox_ptr->num_slots <= mbox_ptr->slots_used && mbox_ptr->block_receive_queue == NULL)
+	{
+		if (mbox_ptr->block_send_queue == NULL)
+		{
+			mbox_ptr->block_send_queue = &MboxProcTable[pid%MAXPROC];
+		}
+		else
+		{
+			mbox_proc_ptr temp = mbox_ptr->block_send_queue;
+			while (temp->next_block_send != NULL)
+			{
+				temp = temp->next_block_send;
+			}
+			temp->next_block_send = &MboxProcTable[pid%MAXPROC];
+		}
+
+		block_me(SEND_BLOCKED);
+		if (MboxProcTable[pid%MAXPROC].mbox_released)
+		{
+			enableInterrupts();
+			return -3;
+		}
+
+		if (is_zapped()) return -3;
+		else return 0;
+	}
+
+	/* Otherwise if there are currently processes inside our receive queue
+	 * then copy contents of the blocked receive message and unblock it.
+	 */
+	if (mbox_ptr->block_receive_queue != NULL)
+	{
+		int blocked_queue_pid = mbox_ptr->block_receive_queue->pid;
+
+		if (msg_size > mbox_ptr->block_receive_queue->msg_size)
+		{
+			mbox_ptr->block_receive_queue->status = FAILED;
+			mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+			unblock_proc(blocked_queue_pid);
+
+			enableInterrupts();
+			return -1;
+		}
+
+		//use memcpy here as document tells us to do
+		memcpy(mbox_ptr->block_receive_queue->message, msg_ptr, msg_size);
+		mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+		unblock_proc(blocked_queue_pid);
+		enableInterrupts();
+
+		if (is_zapped()) return -3;
+		else return 0;
+	}
+
+	/* This means that there are still some slots available and our block
+	 * receive queue is empty. Grab the empty slot and initialize it for use
+	 */
+	int slot = find_empty_slot();
+	if (slot == -2)
+	{
+		if (DEBUG2 && debugflag2) console("MboxSend(): could not locate empty slot.\n");
+		halt(1);
+	}
+
+	//initialize the empty slot
+	slot_ptr new_slot = set_slot(slot, mbox_ptr->mbox_id, msg_ptr, msg_size);
+	insert_slot(new_slot, mbox_ptr);
+
+	enableInterrupts();
+	if (is_zapped()) return -3;
+	else return 0;
 } /* MboxSend */
 
 
@@ -436,17 +592,72 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 ----------------------------------------------------------------------- */
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 {
-	if (DEBUG2 && debugflag2) console("MboxCondSend(): Conditionally sending.\n");
-	// First, check if args valid - THIS CAN BE A FUNCTION - MboxCheck?
-	if mbox_id > || < || OR "" *msg_ptr OR "" msg_size
+	if (DEBUG2 && debugflag2) console("MboxCondSend(): started.\n");
+	check_kernel_mode("MboxCondSend");
+	disableInterrupts();
+
+	if (mbox_id > MAXMBOX || mbox_id < 0)
+	{
+		enableInterrupts();
 		return -1;
-	// Second, validate mbox full/no slots available
-	else if (slots < 0 || slot_size > MAXSLOTS)
+	}
+
+	mbox_proc_ptr mbox_ptr = &MailBoxTable[mbox_id];
+	if (mbox_ptr->num_slots != 0 && msg_size > mbox_ptr->slot_size)
+	{
+		enableInterrupts();
+		return -1;
+	}
+
+	int pid = getpid();
+	MboxProcTable[pid%MAXPROC].pid = pid;
+	MboxProcTable[pid%MAXPROC].status = ACTIVE;
+	MboxProcTable[pid%MAXPROC].message = msg_ptr;
+	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+
+	//if there are no more empty slots then just return
+	if (mbox_ptr->num_slots != 0 && mbox_ptr->num_slots == mbox_ptr->slots_used) {
 		return -2;
-	// Third, send message
-	else
-		send message?
-		return 0;
+	}
+
+	//there are no slots and nothing currently blocked in our receive queue
+	if (mbox_ptr->block_receive_queue == NULL && mbox_ptr->num_slots == 0)
+	{
+		return -1;
+	}
+
+	//check if our process is in the receive queue
+	if (mbox_ptr->block_receive_queue != NULL)
+	{
+		if (msg_size > mbox_ptr->block_receive_queue->msg_size)
+		{
+			enableInterrupts();
+			return -1;
+		}
+		memcpy(mbox_ptr->block_receive_queue->message, msg_ptr, msg_size);
+		mbox_ptr->block_receive_queue->msg_size = msg_size;
+		int blocked_queue_pid = mbox_ptr->block_receive_queue->pid;
+		mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+		unblock_proc(blocked_queue_pid);
+		enableInterrupts();
+		if (is_zapped()) return -3;
+		else return 0;
+	}
+
+	//get empty slot
+	int slot = find_empty_slot();
+	if (slot == -2)
+	{
+		if (DEBUG2 && debugflag2) console("MboxSend(): could not locate empty slot.\n");
+		return -2;
+	}
+	//insert slot
+	slot_ptr new_slot = set_slot(slot, mbox_ptr->mbox_id, msg_ptr, msg_size);
+	insert_slot(new_slot, mbox_ptr);
+
+	enableInterrupts();
+	if (is_zapped()) return -3;
+	else return 0;
 } /* MboxCondSend */
 
 
