@@ -554,6 +554,9 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	}
 
 	//add process to MboxProcTable
+	if (DEBUG2 && debugflag2) {
+		console("MboxSend(): associating process with msg_ptr.\n");
+	}
 	int pid = getpid();
 	add_process(pid, msg_ptr, msg_size);
 
@@ -563,6 +566,11 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	 */
 	if (this_mbox->num_slots <= this_mbox->slots_used && this_mbox->block_receive_queue == NULL)
 	{
+		if (DEBUG2 && debugflag2) {
+			console("MboxSend(): no other blocked receive processes in our queue. ");
+			console("Adding to send queue and blocking.\n");
+		}
+
 		if (this_mbox->block_send_queue == NULL)
 		{
 			this_mbox->block_send_queue = &MboxProcTable[pid%MAXPROC];
@@ -593,6 +601,10 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	 */
 	if (this_mbox->block_receive_queue != NULL)
 	{
+		if (DEBUG2 && debugflag2) {
+			console("MboxSend(): receive processes found in queue. Unblocking.\n");
+		}
+
 		int blocked_queue_pid = this_mbox->block_receive_queue->pid;
 
 		if (msg_size > this_mbox->block_receive_queue->msg_size)
