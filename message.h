@@ -5,11 +5,14 @@
 #define ACTIVE	1
 #define FAILED  2
 
-#define SEND_BLOCKED 11;
-#define RECEIVE_BLOCKED 12;
+#define SEND_BLOCKED 11
+#define RECEIVE_BLOCKED 12
 
+typedef struct mail_slot	mail_slot;
 typedef struct mail_slot	*slot_ptr;
+typedef struct mailbox		mailbox;
 typedef struct mailbox		*mbox_ptr;
+typedef struct mbox_proc	mbox_proc;
 typedef struct mbox_proc	*mbox_proc_ptr;
 
 struct mailbox
@@ -68,7 +71,7 @@ struct mbox_proc {
 	int mbox_released;
 	mbox_proc_ptr next_block_send;
 	mbox_proc_ptr next_block_receive;
-}
+};
 
 union psr_values {
    struct psr_bits bits;
