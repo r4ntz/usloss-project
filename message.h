@@ -8,9 +8,9 @@
 #define SEND_BLOCKED 11;
 #define RECEIVE_BLOCKED 12;
 
-typedef struct mail_slot *slot_ptr;
-typedef struct mailbox mail_box;
-typedef struct mbox_proc *mbox_proc_ptr;
+typedef struct mail_slot	*slot_ptr;
+typedef struct mailbox		*mbox_ptr;
+typedef struct mbox_proc	*mbox_proc_ptr;
 
 struct mailbox
 {

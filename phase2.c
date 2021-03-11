@@ -476,8 +476,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	}
 
 	//check msg_size and compare with slot_size that was set
-	mbox_proc_ptr mbox_ptr = &MailBoxTable[mbox_id];
-	if (mbox_ptr->num_slots != 0 && msg_size > mbox_ptr->slot_size)
+	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
+	if (this_mbox->num_slots != 0 && msg_size > this_mbox->slot_size)
 	{
 		enableInterrupts();
 		return -1;
@@ -493,15 +493,15 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	 * available, then add to send queue and block. check to make sure process
 	 * hasn't been released.
 	 */
-	if (mbox_ptr->num_slots <= mbox_ptr->slots_used && mbox_ptr->block_receive_queue == NULL)
+	if (this_mbox->num_slots <= this_mbox->slots_used && this_mbox->block_receive_queue == NULL)
 	{
-		if (mbox_ptr->block_send_queue == NULL)
+		if (this_mbox->block_send_queue == NULL)
 		{
-			mbox_ptr->block_send_queue = &MboxProcTable[pid%MAXPROC];
+			this_mbox->block_send_queue = &MboxProcTable[pid%MAXPROC];
 		}
 		else
 		{
-			mbox_proc_ptr temp = mbox_ptr->block_send_queue;
+			mbox_proc_ptr temp = this_mbox->block_send_queue;
 			while (temp->next_block_send != NULL)
 			{
 				temp = temp->next_block_send;
@@ -525,12 +525,12 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	 */
 	if (mbox_ptr->block_receive_queue != NULL)
 	{
-		int blocked_queue_pid = mbox_ptr->block_receive_queue->pid;
+		int blocked_queue_pid = this_mbox->block_receive_queue->pid;
 
-		if (msg_size > mbox_ptr->block_receive_queue->msg_size)
+		if (msg_size > this_mbox->block_receive_queue->msg_size)
 		{
-			mbox_ptr->block_receive_queue->status = FAILED;
-			mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+			this_mbox->block_receive_queue->status = FAILED;
+			this_mbox->block_receive_queue = this_mbox->block_receive_queue->next_block_receive;
 			unblock_proc(blocked_queue_pid);
 
 			enableInterrupts();
@@ -538,8 +538,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 		}
 
 		//use memcpy here as document tells us to do
-		memcpy(mbox_ptr->block_receive_queue->message, msg_ptr, msg_size);
-		mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+		memcpy(this_mbox->block_receive_queue->message, msg_ptr, msg_size);
+		this_mbox->block_receive_queue = this_mbox->block_receive_queue->next_block_receive;
 		unblock_proc(blocked_queue_pid);
 		enableInterrupts();
 
@@ -558,8 +558,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	}
 
 	//initialize the empty slot
-	slot_ptr new_slot = set_slot(slot, mbox_ptr->mbox_id, msg_ptr, msg_size);
-	insert_slot(new_slot, mbox_ptr);
+	slot_ptr new_slot = set_slot(slot, this_mbox->mbox_id, msg_ptr, msg_size);
+	insert_slot(new_slot, this_mbox);
 
 	enableInterrupts();
 	if (is_zapped()) return -3;
@@ -602,8 +602,8 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 		return -1;
 	}
 
-	mbox_proc_ptr mbox_ptr = &MailBoxTable[mbox_id];
-	if (mbox_ptr->num_slots != 0 && msg_size > mbox_ptr->slot_size)
+	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
+	if (this_mbox->num_slots != 0 && msg_size > this_mbox->slot_size)
 	{
 		enableInterrupts();
 		return -1;
@@ -616,28 +616,28 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
 
 	//if there are no more empty slots then just return
-	if (mbox_ptr->num_slots != 0 && mbox_ptr->num_slots == mbox_ptr->slots_used) {
+	if (this_mbox)->num_slots != 0 && this_mbox->num_slots == this_mbox->slots_used) {
 		return -2;
 	}
 
 	//there are no slots and nothing currently blocked in our receive queue
-	if (mbox_ptr->block_receive_queue == NULL && mbox_ptr->num_slots == 0)
+	if (this_mbox->block_receive_queue == NULL && this_mbox->num_slots == 0)
 	{
 		return -1;
 	}
 
 	//check if our process is in the receive queue
-	if (mbox_ptr->block_receive_queue != NULL)
+	if (this_mbox->block_receive_queue != NULL)
 	{
-		if (msg_size > mbox_ptr->block_receive_queue->msg_size)
+		if (msg_size > this_mbox->block_receive_queue->msg_size)
 		{
 			enableInterrupts();
 			return -1;
 		}
-		memcpy(mbox_ptr->block_receive_queue->message, msg_ptr, msg_size);
-		mbox_ptr->block_receive_queue->msg_size = msg_size;
-		int blocked_queue_pid = mbox_ptr->block_receive_queue->pid;
-		mbox_ptr->block_receive_queue = mbox_ptr->block_receive_queue->next_block_receive;
+		memcpy(this_mbox->block_receive_queue->message, msg_ptr, msg_size);
+		this_mbox->block_receive_queue->msg_size = msg_size;
+		int blocked_queue_pid = this_mbox->block_receive_queue->pid;
+		this_mbox->block_receive_queue = this_mbox->block_receive_queue->next_block_receive;
 		unblock_proc(blocked_queue_pid);
 		enableInterrupts();
 		if (is_zapped()) return -3;
@@ -652,8 +652,8 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 		return -2;
 	}
 	//insert slot
-	slot_ptr new_slot = set_slot(slot, mbox_ptr->mbox_id, msg_ptr, msg_size);
-	insert_slot(new_slot, mbox_ptr);
+	slot_ptr new_slot = set_slot(slot, this_mbox->mbox_id, msg_ptr, msg_size);
+	insert_slot(new_slot, this_mbox);
 
 	enableInterrupts();
 	if (is_zapped()) return -3;
@@ -679,10 +679,115 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
    ----------------------------------------------------------------------- */
 int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
+	if (DEBUG2 && debugflag2) console("MboxReceive(): started.\n");
+	check_kernel_mode("MboxReceive");
+	disableInterrupts();
 
-	// End this function by blocking if no msg waiting
-	while no msg waiting
-		block_me();
+	if (MailBoxTable[mbox_id].status == EMPTY)
+	{
+		enableInterrupts();
+		return 1;
+	}
+
+	if (msg_size < 0)
+	{
+		enableInterrupts();
+		return -1;
+	}
+
+	int pid = getpid();
+	MboxProcTable[pid%MAXPROC].pid = pid;
+	MboxProcTable[pid%MAXPROC].status = ACTIVE;
+	MboxProcTable[pid%MAXPROC].message = msg_ptr;
+	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+
+
+	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
+	if (this_mbox->num_slots == 0 && this_mbox->block_send_queue != NULL)
+	{
+		mbox_proc_ptr sender = this_mbox->block_send_queue;
+		memcpy(msg_ptr, sender->message, sender->msg_size);
+		this_mbox->block_send_queue = this_mbox->block_send_queue->next_block_send;
+		unblock_proc(sender->pid);
+		return sender->msg_size;
+	}
+
+
+	slot_ptr first_slot = this_mbox->slot_queue;
+
+	//block when there are no messages available..
+	if (first_slot == NULL)
+	{
+		if (this_mbox->block_receive_queue == NULL)
+		{
+			this_mbox->block_receive_queue = &MboxProcTable[pid % MAXPROC];
+		}
+		else
+		{
+			mbox_proc_ptr walker = this_mbox->block_receive_queue;
+			while (walker->next_block_receive != NULL)
+			{
+				walker = walker->next_block_receive;
+			}
+			walker->next_block_receive = &MboxProcTable[pid % MAXPROC];
+		}
+
+		block_me(RECEIVE_BLOCKED);
+
+		if (&MboxProcTable[pid % MAXPROC].mbox_released)
+		{
+			enableInterrupts();
+			return -3;
+		}
+		if (is_zapped())
+		{
+			enable_interrupts();
+			return -3;
+		}
+		if (MboxProcTable[pid % MAXPROC].status == FAILED)
+		{
+			enable_interrupts();
+			return -1;
+		}
+
+		enable_interrupts();
+		return MboxProcTable[pid % MAXPROC].msg_size;
+
+	}
+
+	//this means that there are messages still available on slot list
+	else
+	{
+		if (first_slot->message_size > msg_size)
+		{
+			enableInterrupts();
+			return -1;
+		}
+		memcpy(msg_ptr, first_slot->message, first_slot->msg_size);
+		this_mbox->slot_queue = first_slot->next_slot_ptr;
+		int size = first_slot->message_size;
+		init_slot(first_slot->slot_id);
+		this_mbox->slots_used--;
+
+		if (this_mbox->block_send_queue != NULL)
+		{
+			int slot_index = find_empty_slot();
+			slot_ptr new_slot = set_slot(slot_index, this_mbox->mbox_id,
+				this_mbox->block_send_queue->message,
+				this_mbox->block_send_queue->msg_size);
+
+			insert_slot(new_slot, this_mbox);
+
+			//wake up process blocked on send queue
+			int pid = this_mbox->block_send_queue->pid;
+			this_mbox->block_send_queue = this_mbox->block_send_queue->next_block_send;
+			unblock_proc(pid);
+		}
+
+		enable_interrupts();
+		if (is_zapped()) return -3;
+		else return size;
+	}
 
 } /* MboxReceive */
 
@@ -704,7 +809,83 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
    ----------------------------------------------------------------------- */
 int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size)
 {
+	if (DEBUG2 && debugflag2) console("MboxCondReceive(): started.\n");
+	check_kernel_mode("MboxCondReceive");
+	disableInterrupts();
 
+	//check parameters
+	if (MailBoxTable[mbox_id].status == EMPTY)
+	{
+		enableInterrupts();
+		return -1;
+	}
+
+	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
+
+	if (msg_size < 0)
+	{
+		enableInterrupts();
+		return -1;
+	}
+
+	int pid = getpid();
+	MboxProcTable[pid % MAXPROC].pid = pid;
+	MboxProcTable[pid % MAXPROC].status = ACTIVE;
+	MboxProcTable[pid % MAXPROC].message = msg_ptr;
+	MboxProcTable[pid % MAXPROC].msg_size = msg_size;
+
+	//no slots but there is a process on send list
+	if (this_mbox->num_slots == 0 && this_mbox->block_send_queue != NULL)
+	{
+		this_mbox sender = this_mbox->block_send_queue;
+		memcpy(msg_ptr, sender->message, sender->msg_size);
+		this_mbox->block_send_queue = this_mbox->block_send_queue->next_block_send;
+		unblock_proc(sender->pid);
+		return sender->msg_size;
+	}
+
+	slot_ptr first_slot = this_mbox->slot_queue;
+
+	//empty slot
+	if (first_slot == NULL)
+	{
+		enableInterrupts();
+		return -2;
+	}
+	//this means that there is a msg in the slot
+	else
+	{
+		if (first_slot->message_size > msg_size)
+		{
+			enableInterrupts();
+			return -1;
+		}
+		memcpy(msg_ptr, first_slot->message, first_slot->message_size);
+		this_mbox->slot_queue = first_slot->next_slot_ptr;
+		int size = first_slot->message_size;
+		init_slot(first_slot->slot_id);
+		this_mbox->slots_used--;
+	}
+
+	// if there is a msg on the send list waiting for slot
+	if (this_mbox->block_send_queue != NULL)
+	{
+		int slot_index = find_empty_slot();
+		slot_ptr new_slot = set_slot(slot_index, this_mbox->mbox_id,
+			this_mbox->block_send_queue->message,
+			this_mbox->block_send_queue->msg_size);
+
+		insert_slot(new_slot, this_mbox);
+
+		//wake up process blocked on send queue
+		int pid = this_mbox->block_send_queue->pid;
+		this_mbox->block_send_queue = this_mbox->block_send_queue->next_block_send;
+		unblock_proc(pid);
+	}
+
+	enableInterrupts();
+	if (is_zapped()) return -3;
+	else return size;
 } /* MboxReceive */
 
 
