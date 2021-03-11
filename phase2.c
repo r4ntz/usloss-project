@@ -305,7 +305,16 @@ void init_slot(int index)
 } /* init_slot */
 
 
-
+void init_process(int pid)
+{
+	MboxProcTable[pid % MAXPROC].pid = -1;
+	MboxProcTable[pid % MAXPROC].status = EMPTY;
+	MboxProcTable[pid % MAXPROC].message = NULL;
+	MboxProcTable[pid % MAXPROC].msg_size = -1;
+	MboxProcTable[pid % MAXPROC].mbox_released = 0;
+	MboxProcTable[pid % MAXPROC].next_block_send = NULL;
+	MboxProcTable[pid % MAXPROC].next_block_receive = NULL;
+}
 /* ------------------------------------------------------------------------
    Name - add_process
    Purpose - Provides way to store message in process
@@ -372,7 +381,7 @@ int insert_slot(slot_ptr add_this, mbox_ptr some_mailbox)
    Name - find_empty_slot
    Purpose - Finds empty slot in slot table
    Parameters - None
-   Returns - index to empty slot in slot table
+   Returns - index to empty slot in slot table or -2 if nothing is found
    Side Effects - ???
    ----------------------------------------------------------------------- */
 int find_empty_slot()
@@ -425,6 +434,11 @@ int start1(char *arg)
 	for (i=0; i < MAXSLOTS; i++)
 	{
 		init_slot(i);
+	}
+
+	/* Initializing processes inside proc table */
+	for (i=0; i < MAXPROC; i++) {
+		init_process(i);
 	}
 
 	/* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
@@ -567,7 +581,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	if (this_mbox->num_slots <= this_mbox->slots_used && this_mbox->block_receive_queue == NULL)
 	{
 		if (DEBUG2 && debugflag2) {
-			console("MboxSend(): no other blocked receive processes in our queue. ");
+			console("MboxSend(): slots full and no processes in our block receive queue. ");
 			console("Adding to send queue and blocking.\n");
 		}
 
@@ -638,6 +652,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	}
 
 	//initialize the empty slot
+	if (DEBUG2 && debugflag2) console("MboxSend(): filling empty slot.\n");
+
 	slot_ptr new_slot = set_slot(slot, this_mbox->mbox_id, msg_ptr, msg_size);
 	insert_slot(new_slot, this_mbox);
 
