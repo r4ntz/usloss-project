@@ -8,30 +8,10 @@
 	Rantz Marion & Mark Whitson
 
 
-
-
 --------------------------------
 Notes and Ideas
 
-	Blocking & Unblocking
-		IF proc A is blocked from sending because mbox is full
-		THEN receive operation should unblock A
-
-		IF proc B receives empty msg from mbox and is blocked
-		THEN unblocking B should be fone by send operation to mbox
-
-
-	Do we need to place send/receive operations in a while loop to determine they are following FIFO?
-
-	Testing for kernel mode must be done on 100% of functions.
-
-	Items to add to the mailbox struct in message.h?
-		Calling process PID
-		Calling process PRI
-		Queue int to count, validate FIFO
-
-	Phase 1 functions available
-		fork1, join, quit, zap, is zapped, getpid, dump processes, block me, unblock proc, read cur start time, and time slice
+	Investigate MboxSend and clock_handler2. test08 not giving us expected output
 
 ------------------------------------------------------------------------ */
 
@@ -40,6 +20,7 @@ Notes and Ideas
 
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <phase1.h>
 #include <phase2.h>
 #include <usloss.h>
@@ -51,13 +32,13 @@ Notes and Ideas
 //Phase 2 Prototypes
 
 int start1 (char *);
-int MboxCreate(int slots, int slot_size);
-int MboxSend(int mbox_id, void *msg_ptr, int msg_size);
-int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size);
-int MboxReceive(int mbox_id, void *msg_ptr, int msg_size);
-int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size);
-int MboxRelease(int mbox_id);
-int MboxCheck (int mbox_id, void *msg_ptr, int msg_size);
+int MboxCreate(int, int);
+int MboxSend(int, void *, int);
+int MboxCondSend(int, void *, int);
+int MboxReceive(int, void *, int);
+int MboxCondReceive(int, void *, int);
+int MboxRelease(int);
+int MboxCheck (int, void *, int);
 void clock_handler2(int, void *);
 void disk_handler(int, long);
 void term_handler(int, long);
@@ -65,6 +46,7 @@ int check_io(void);
 void check_kernel_mode(char *);
 void enableInterrupts(void);
 void disableInterrupts(void);
+void add_process(int, void *, int);
 extern int start2 (char *);
 extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 
@@ -325,6 +307,23 @@ void init_slot(int index)
 
 
 /* ------------------------------------------------------------------------
+   Name - add_process
+   Purpose - Provides way to store message in process
+   Parameters - pid, msg_ptr, msg_size
+   Returns - Nothing
+   Side Effects - Overwrites previously set attributes if called into same index
+   ----------------------------------------------------------------------- */
+void add_process(int pid, void *msg_ptr, int msg_size)
+{
+	MboxProcTable[pid%MAXPROC].pid = pid;
+	MboxProcTable[pid%MAXPROC].status = ACTIVE;
+	MboxProcTable[pid%MAXPROC].message = msg_ptr;
+	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+} /* add_process*/
+
+
+
+/* ------------------------------------------------------------------------
    Name - set_slot
    Purpose - Sets attributes of specific slot in our slot table
    Parameters - index for the SlotTable array
@@ -554,11 +553,9 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 		return -1;
 	}
 
+	//add process to MboxProcTable
 	int pid = getpid();
-	MboxProcTable[pid%MAXPROC].pid = pid;
-	MboxProcTable[pid%MAXPROC].status = ACTIVE;
-	MboxProcTable[pid%MAXPROC].message = msg_ptr;
-	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+	add_process(pid, msg_ptr, msg_size);
 
 	/* If there are no other blocked receive processes in our queue and no empty slots
 	 * available, then add to send queue and block. check to make sure process
@@ -680,11 +677,9 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size)
 		return -1;
 	}
 
+	//add process to MboxProcTable
 	int pid = getpid();
-	MboxProcTable[pid%MAXPROC].pid = pid;
-	MboxProcTable[pid%MAXPROC].status = ACTIVE;
-	MboxProcTable[pid%MAXPROC].message = msg_ptr;
-	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+	add_process(pid, msg_ptr, msg_size);
 
 	//if there are no more empty slots then just return
 	if (this_mbox->num_slots != 0 && this_mbox->num_slots == this_mbox->slots_used) {
@@ -766,11 +761,9 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 		return -1;
 	}
 
+	//add process to MboxProcTable
 	int pid = getpid();
-	MboxProcTable[pid%MAXPROC].pid = pid;
-	MboxProcTable[pid%MAXPROC].status = ACTIVE;
-	MboxProcTable[pid%MAXPROC].message = msg_ptr;
-	MboxProcTable[pid%MAXPROC].msg_size = msg_size;
+	add_process(pid, msg_ptr, msg_size);
 
 
 	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
@@ -899,11 +892,9 @@ int MboxCondReceive(int mbox_id, void *msg_ptr, int msg_size)
 		return -1;
 	}
 
+	//add process to MboxProcTable
 	int pid = getpid();
-	MboxProcTable[pid % MAXPROC].pid = pid;
-	MboxProcTable[pid % MAXPROC].status = ACTIVE;
-	MboxProcTable[pid % MAXPROC].message = msg_ptr;
-	MboxProcTable[pid % MAXPROC].msg_size = msg_size;
+	add_process(pid, msg_ptr, msg_size);
 
 	//no slots but there is a process on send list
 	if (this_mbox->num_slots == 0 && this_mbox->block_send_queue != NULL)
