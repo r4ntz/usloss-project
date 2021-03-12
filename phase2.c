@@ -94,7 +94,21 @@ void check_kernel_mode(char * function_name)
 		console("Kernel Error: %s() not in kernel mode.\n", function_name);
 		halt(1);
 	}
-}
+} /*check_kernel_mode */
+
+
+/* ------------------------------------------------------------------------
+   Name - nullsys
+   Purpose - To handle invalid sys calls
+   Parameters - args
+   Returns - Nothing
+   Side Effects - Halts
+   ----------------------------------------------------------------------- */
+void nullsys(sysargs * args)
+{
+    console("nullsys(): Invalid syscall %d. Halting...\n", args->number);
+    halt(1);
+} /* nullsys */
 
 
 
@@ -107,6 +121,8 @@ void check_kernel_mode(char * function_name)
    ----------------------------------------------------------------------- */
 void enableInterrupts()
 {
+	if (DEBUG2 && debugflag2) console("enabled interrupts.\n");
+
 	//PSR_CURRENT_INT is 0x2
 	psr_set(psr_get() | PSR_CURRENT_INT);
 }
@@ -121,6 +137,8 @@ void enableInterrupts()
    ----------------------------------------------------------------------- */
 void disableInterrupts()
 {
+	if (DEBUG2 && debugflag2) console("disabled interrupts.\n");
+
 	psr_set(psr_get() & ~PSR_CURRENT_INT);
 }
 
@@ -264,6 +282,32 @@ void term_handler(int dev, long unit)
 	enableInterrupts();
 } /* term_handler */
 
+
+/* ------------------------------------------------------------------------
+   Name - syscall_handler
+   Purpose - Part of interrupt vector
+   Parameters - dev, unit
+   Returns - Nothing
+   Side Effects - None
+   ----------------------------------------------------------------------- */
+void syscall_handler(int dev, void * unit)
+{
+	if (DEBUG2 && debugflag2) console("syscall_handler(): called.\n");
+	check_kernel_mode("syscall_handler");
+	disableInterrupts();
+
+	sysargs * args = unit;
+	int syscall = args->number;
+
+	if (dev != SYSCALL_INT || syscall < 0 || syscall >= MAXSYSCALLS)
+	{
+		console("syscall_handler(): dev or syscall #%d is wrong.\n", syscall);
+		halt(1);
+	}
+
+	(*sys_vec[syscall])(args);
+	enableInterrupts();
+} /* syscall_handler() */
 
 
 /* ------------------------------------------------------------------------
@@ -456,6 +500,9 @@ int start1(char *arg)
 	int_vec[CLOCK_DEV] =	clock_handler2;
 	int_vec[DISK_DEV] =		disk_handler;
 	int_vec[TERM_DEV] =		term_handler;
+	int_vec[SYSCALL_INT] = syscall_handler;
+
+	for (int i = 0; i < MAXSYSCALLS; i++) sys_vec[i] = nullsys;
 
 	enableInterrupts();
 
@@ -499,7 +546,7 @@ int MboxCreate(int slots, int slot_size)
 	disableInterrupts();
 
 	// First check if args are valid
-	if (slots < 0 || slot_size > MAXSLOTS)
+	if (slots < 0 || slot_size > MAX_MESSAGE)
 	{
 		if (DEBUG2 && debugflag2)
 			console("MboxCreate(): slot_size larger than MAXSLOTS and/or slots (no. of slots) is smaller than 0.\n");
@@ -571,6 +618,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 
 	//check msg_size and compare with slot_size that was set
 	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
+
 	if (this_mbox->num_slots != 0 && msg_size > this_mbox->slot_size)
 	{
 		enableInterrupts();
