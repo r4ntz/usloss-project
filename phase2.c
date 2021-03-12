@@ -152,6 +152,7 @@ int check_io()
 void clock_handler2(int dev, void * unit)
 {
 	if (DEBUG2 && debugflag2) console("clock_handler2(): started.\n");
+	check_kernel_mode("clock_handler2");
 	disableInterrupts();
 
 	/* check to make sure right values were passed */
@@ -358,21 +359,30 @@ slot_ptr set_slot(int index, int mbox_id, void * msg, int msg_size)
    ----------------------------------------------------------------------- */
 int insert_slot(slot_ptr add_this, mbox_ptr some_mailbox)
 {
-			slot_ptr head = some_mailbox->slot_queue;
-			if (head == NULL)
-			{
-				some_mailbox->slot_queue = add_this;
-			}
-			else
-			{
-				while (head->next_slot_ptr != NULL)
-				{
-					head = head->next_slot_ptr;
-				}
-				head->next_slot_ptr = add_this;
+	if (DEBUG2 && debugflag2) {
+		console("insert_slot(): started... ");
+	}
 
-			}
-			return ++some_mailbox->slots_used;
+	slot_ptr head = some_mailbox->slot_queue;
+	if (head == NULL)
+	{
+		some_mailbox->slot_queue = add_this;
+	}
+	else
+	{
+		while (head->next_slot_ptr != NULL)
+		{
+			head = head->next_slot_ptr;
+		}
+		head->next_slot_ptr = add_this;
+
+	}
+
+	if (DEBUG2 && debugflag2) {
+		console(" and ended.\n");
+	}
+
+	return ++some_mailbox->slots_used;
 
 } /* insert_slot */
 
@@ -443,9 +453,9 @@ int start1(char *arg)
 
 	/* Initialize int_vec and sys_vec, allocate mailboxes for interrupt
 	*  handlers.  Etc... */
-	int_vec[CLOCK_DEV] = clock_handler2;
-	int_vec[DISK_DEV] = disk_handler;
-	int_vec[TERM_DEV] = term_handler;
+	int_vec[CLOCK_DEV] =	clock_handler2;
+	int_vec[DISK_DEV] =		disk_handler;
+	int_vec[TERM_DEV] =		term_handler;
 
 	enableInterrupts();
 
@@ -616,7 +626,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	if (this_mbox->block_receive_queue != NULL)
 	{
 		if (DEBUG2 && debugflag2) {
-			console("MboxSend(): receive processes found in queue. Unblocking.\n");
+			console("MboxSend(): receive processes found in block receive queue. Unblocking.\n");
 		}
 
 		int blocked_queue_pid = this_mbox->block_receive_queue->pid;
