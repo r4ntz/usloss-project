@@ -40,8 +40,8 @@ int MboxCondReceive(int, void *, int);
 int MboxRelease(int);
 int MboxCheck (int, void *, int);
 void clock_handler2(int, void *);
-void disk_handler(int, long);
-void term_handler(int, long);
+void disk_handler(int, void *);
+void term_handler(int, void *);
 int check_io(void);
 void check_kernel_mode(char *);
 void enableInterrupts(void);
@@ -121,8 +121,6 @@ void nullsys(sysargs * args)
    ----------------------------------------------------------------------- */
 void enableInterrupts()
 {
-	if (DEBUG2 && debugflag2) console("enabled interrupts.\n");
-
 	//PSR_CURRENT_INT is 0x2
 	psr_set(psr_get() | PSR_CURRENT_INT);
 }
@@ -137,8 +135,6 @@ void enableInterrupts()
    ----------------------------------------------------------------------- */
 void disableInterrupts()
 {
-	if (DEBUG2 && debugflag2) console("disabled interrupts.\n");
-
 	psr_set(psr_get() & ~PSR_CURRENT_INT);
 }
 
@@ -214,7 +210,7 @@ void clock_handler2(int dev, void * unit)
    Returns - Nothing
    Side Effects - None
    ----------------------------------------------------------------------- */
-void disk_handler(int dev, long unit)
+void disk_handler(int dev, void * unit)
 {
 	if (DEBUG2 && debugflag2) console("disk_handler(): started.\n");
 	check_kernel_mode("disk_handler");
@@ -230,8 +226,8 @@ void disk_handler(int dev, long unit)
 	}
 
 	int status;
-	int mbox_id = unit + 1;
-	int ret = device_input(dev, unit, &status);
+	int mbox_id = ((long) unit) + 1;
+	int ret = device_input(dev, (long) unit, &status);
 	if (ret == DEV_INVALID)
 	{
 		if (DEBUG2 && debugflag2)
@@ -252,7 +248,7 @@ void disk_handler(int dev, long unit)
    Returns - Nothing
    Side Effects - None
    ----------------------------------------------------------------------- */
-void term_handler(int dev, long unit)
+void term_handler(int dev, void * unit)
 {
 	if (DEBUG2 && debugflag2) console("term_handler(): started.\n");
 	check_kernel_mode("term_handler");
@@ -268,8 +264,8 @@ void term_handler(int dev, long unit)
 	}
 
 	int status;
-	int mbox_id = unit + 3;
-	int ret = device_input(dev, unit, &status);
+	int mbox_id = (long) unit + 3;
+	int ret = device_input(dev, (long) unit, &status);
 	if (ret == DEV_INVALID)
 	{
 		if (DEBUG2 && debugflag2)
@@ -623,6 +619,11 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	{
 		enableInterrupts();
 		return -1;
+	}
+
+	if (this_mbox->num_slots == 0)
+	{
+		console("!!! - check this out\n");
 	}
 
 	//add process to MboxProcTable
