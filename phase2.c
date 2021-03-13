@@ -9,10 +9,12 @@
 
 
 --------------------------------
-Notes and Ideas
+To-Do:
 
-	Investigate MboxSend and clock_handler2. test08 not giving us expected output
+	Look @ test case 35 in general. not sure where to begin,
+	look @ test case 40 the last result is -1 but needs to be 0
 
+	Clean up and organize the code
 ------------------------------------------------------------------------ */
 
 
@@ -630,6 +632,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 		console("MboxSend(): associating process with msg_ptr.\n");
 	}
 	int pid = getpid();
+
 	add_process(pid, msg_ptr, msg_size);
 
 	/* If there are no other blocked receive processes in our queue and no empty slots
@@ -691,6 +694,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 
 		//use memcpy here as document tells us to do
 		memcpy(this_mbox->block_receive_queue->message, msg_ptr, msg_size);
+		this_mbox->block_receive_queue->msg_size = msg_size;
 		this_mbox->block_receive_queue = this_mbox->block_receive_queue->next_block_receive;
 		unblock_proc(blocked_queue_pid);
 		enableInterrupts();
@@ -851,7 +855,6 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 	int pid = getpid();
 	add_process(pid, msg_ptr, msg_size);
 
-
 	mbox_ptr this_mbox = &MailBoxTable[mbox_id];
 	if (this_mbox->num_slots == 0 && this_mbox->block_send_queue != NULL)
 	{
@@ -861,7 +864,6 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 		unblock_proc(sender->pid);
 		return sender->msg_size;
 	}
-
 
 	slot_ptr first_slot = this_mbox->slot_queue;
 
@@ -884,7 +886,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 
 		block_me(RECEIVE_BLOCKED);
 
-		if (&MboxProcTable[pid % MAXPROC].mbox_released)
+		if (MboxProcTable[pid % MAXPROC].mbox_released)
 		{
 			enableInterrupts();
 			return -3;
@@ -933,7 +935,6 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 			this_mbox->block_send_queue = this_mbox->block_send_queue->next_block_send;
 			unblock_proc(pid);
 		}
-
 		enableInterrupts();
 		if (is_zapped()) return -3;
 		else return size;
