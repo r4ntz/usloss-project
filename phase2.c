@@ -119,8 +119,10 @@ void nullsys(sysargs * args)
    Returns - Nothing
    Side Effects - None
    ----------------------------------------------------------------------- */
-void enableInterrupts()
+void disableInterrupts()
 {
+	//console("%d | %d = %d\n", psr_get(), PSR_CURRENT_INT, psr_get() | PSR_CURRENT_INT);
+
 	//PSR_CURRENT_INT is 0x2
 	psr_set(psr_get() | PSR_CURRENT_INT);
 }
@@ -133,8 +135,10 @@ void enableInterrupts()
    Returns - Nothing
    Side Effects - None
    ----------------------------------------------------------------------- */
-void disableInterrupts()
+void enableInterrupts()
 {
+	//console("%d & ~%d = %d\n", psr_get(), ~PSR_CURRENT_INT, psr_get() & ~PSR_CURRENT_INT);
+
 	psr_set(psr_get() & ~PSR_CURRENT_INT);
 }
 
@@ -317,9 +321,9 @@ void init_mailbox(int id)
 {
   MailBoxTable[id].mbox_id = id;
   MailBoxTable[id].status = EMPTY;
-  MailBoxTable[id].num_slots = -1;
+  MailBoxTable[id].num_slots = 0;
   MailBoxTable[id].slot_size = -1;
-	MailBoxTable[id].slots_used = -1;
+	MailBoxTable[id].slots_used = 0;
 	MailBoxTable[id].block_receive_queue = NULL;
 	MailBoxTable[id].block_send_queue = NULL;
 	MailBoxTable[id].slot_queue = NULL;
@@ -619,11 +623,6 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 	{
 		enableInterrupts();
 		return -1;
-	}
-
-	if (this_mbox->num_slots == 0)
-	{
-		console("!!! - check this out\n");
 	}
 
 	//add process to MboxProcTable
