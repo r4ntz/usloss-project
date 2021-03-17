@@ -7,14 +7,6 @@
 
 	Rantz Marion & Mark Whitson
 
-
---------------------------------
-To-Do:
-
-	Look @ test case 35 in general. not sure where to begin,
-	look @ test case 40 the last result is -1 but needs to be 0
-
-	Clean up and organize the code
 ------------------------------------------------------------------------ */
 
 
@@ -49,6 +41,10 @@ void check_kernel_mode(char *);
 void enableInterrupts(void);
 void disableInterrupts(void);
 void add_process(int, void *, int);
+slot_ptr set_slot(int, int, void *, int);
+int insert_slot(slot_ptr, mbox_ptr);
+int find_empty_slot(void);
+void nullsys(sysargs *);
 extern int start2 (char *);
 extern void (*int_vec[NUM_INTS])(int dev, void * unit);
 
@@ -548,10 +544,10 @@ int MboxCreate(int slots, int slot_size)
 	disableInterrupts();
 
 	// First check if args are valid
-	if (slots < 0 || slot_size > MAX_MESSAGE)
+	if (slots < 0 || slot_size > MAX_MESSAGE || slot_size < 0)
 	{
 		if (DEBUG2 && debugflag2)
-			console("MboxCreate(): slot_size larger than MAXSLOTS and/or slots (no. of slots) is smaller than 0.\n");
+			console("MboxCreate(): illegal value(s) for parameters.\n");
 		enableInterrupts();
 		return -1;
 	}
@@ -684,12 +680,14 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size)
 
 		if (msg_size > this_mbox->block_receive_queue->msg_size)
 		{
+			if (DEBUG2 && debugflag2) {
+				console("MboxSend(): msg_size is greater than our block_receive_queue msg_size.\n");
+			}
 			this_mbox->block_receive_queue->status = FAILED;
 			this_mbox->block_receive_queue = this_mbox->block_receive_queue->next_block_receive;
 			unblock_proc(blocked_queue_pid);
-
 			enableInterrupts();
-			return -1;
+			return 0;
 		}
 
 		//use memcpy here as document tells us to do
@@ -842,7 +840,7 @@ int MboxReceive(int mbox_id, void *msg_ptr, int msg_size)
 	if (MailBoxTable[mbox_id].status == EMPTY)
 	{
 		enableInterrupts();
-		return 1;
+		return -1;
 	}
 
 	if (msg_size < 0)
@@ -1176,26 +1174,3 @@ int waitdevice(int type, int unit, int *status)
 	if (check_receive == -3) return -1;
 	else return 0;
 } /* WaitDevice */
-
-
-
-
-
-/* ------------------------------------------------------------------------
-	Name
-		MboxCheck
-	Purpose
-		Checks arguments to reduce redundancy in code
-	Parameters
-		mbox_id, msg_ptr, and msg_size
-	Returns
-		1: everything looks good
-		0: invalid arguments used
-	Side Effects
-
-	WORK ON THIS LATER
-   ----------------------------------------------------------------------- */
-int MboxCheck (int mbox_id, void *msg_ptr, int msg_size)
-{
-	return 0;
-}
