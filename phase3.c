@@ -1,14 +1,31 @@
+/* ------------------------------------------------------------------------
+	phase3.c
+
+	University of Arizona South
+	Computer Science 452
+
+
+	Rantz Marion & Mark Whitson
+
+------------------------------------------------------------------------ */
+
+
+/* ------------------------- Includes ----------------------------------- */
 #include <usloss.h>
 #include <phase1.h>
 #include <phase2.h>
 #include <phase3.h>
 
-int start2(char *); 
-int  spawn_real(char *name, int (*func)(char *), char *arg,
-                int stack_size, int priority);
-int  wait_real(int *status);
-int
-start2(char *arg)
+
+/* ------------------------- Prototypes ----------------------------------- */
+int start2(char *);
+int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority);
+int wait_real(int *status);
+
+
+
+/* -------------------------- Functions ----------------------------------- */
+int start2(char *arg)
 {
     int		pid;
     int		status;
@@ -46,11 +63,10 @@ start2(char *arg)
      * begin executing the function passed to Spawn. spawn_launch() will
      * need to switch to user-mode before allowing user code to execute.
      * spawn_real() will return to spawn(), which will put the return
-     * values back into the sysargs pointer, switch to user-mode, and 
+     * values back into the sysargs pointer, switch to user-mode, and
      * return to the user code that called Spawn.
      */
     pid = spawn_real("start3", start3, NULL, 4*USLOSS_MIN_STACK, 3);
     pid = wait_real(&status);
 
 } /* start2 */
-
