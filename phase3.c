@@ -40,7 +40,7 @@ static void getPID(sysargs *args);
 int spawn_real(char *name, int(*func)(char *), char *arg, unsigned int stack_size, int priority);
 int spawn_launch(char *args);
 int wait_real(int *status);
-int terminate_real(int status);
+void terminate_real(int status);
 int sem_create_real(int value);
 int semp_real(int semID);
 int semv_real(int semID);
@@ -57,6 +57,7 @@ void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
 int debugflag3 = 1;
 int next_sem = 0;
+int num_processes = 3;
 /* -------------------------- Functions ----------------------------------- */
 
 /* ------------------------------------------------------------------------
@@ -87,6 +88,86 @@ void set_user_mode()
 {
   psr_set(psr_get() & ~PSR_CURRENT_MODE);
 } /* set_user_mode */
+
+
+/* ------------------------------------------------------------------------
+   Name - add_child
+   Purpose - Self-explanatory
+   Parameters - parent pid and child pid
+   Returns - N/A
+   Side Effects - ??
+   ----------------------------------------------------------------------- */
+void add_child(int parent_id, int child_id)
+{
+  if (debugflag3)
+  {
+    console("add_child(): adding child with pid: %d and parent: %d\n", parent_id, child_id);
+  }
+  check_kernel_mode("add_child");
+
+  parent_id = parent_id % MAXPROC;
+  child_id =  child_id % MAXPROC;
+
+  ProcTable[parent_id].num_children--;
+
+  if (ProcTable[parent_id].child_ptr == NULL)
+  {
+    ProcTable[parent_id].child_ptr = &ProcTable[child_id];
+  }
+
+  else
+  {
+    proc_ptr child = ProcTable[parent_id].child_ptr;
+    while (child->next_sibling_ptr != NULL)
+    {
+      child = child->next_sibling_ptr;
+    }
+
+    child->next_sibling_ptr = &ProcTable[child_id];
+  }
+} /* add_child */
+
+
+/* ------------------------------------------------------------------------
+   Name - remove_child
+   Purpose - Self-explanatory
+   Parameters - parent pid and child pid
+   Returns - N/A
+   Side Effects - ??
+   ----------------------------------------------------------------------- */
+void remove_child(int parent_id, int child_id)
+{
+  if (debugflag3)
+  {
+    console("remove_child(): removing child with pid: %d and parent: %d\n", child_id, parent_id);
+  }
+  check_kernel_mode("remove_child");
+
+  parent_id = parent_id % MAXPROC;
+
+  ProcTable[parent_id].num_children--;
+
+  if (ProcTable[parent_id].child_ptr->pid == child_id)
+  {
+    ProcTable[parent_id].child_ptr = ProcTable[parent_id].child_ptr->next_sibling_ptr;
+  }
+
+  else
+  {
+    proc_ptr child = ProcTable[parent_id].child_ptr;
+
+    while(child->next_sibling_ptr != NULL)
+    {
+      if (child->next_sibling_ptr->pid == child_id)
+      {
+        child->next_sibling_ptr = child->next_sibling_ptr->next_sibling_ptr;
+        break;
+      }
+      child = child->next_sibling_ptr;
+    }
+  }
+} /* remove_child */
+
 
 
 /* ------------------------------------------------------------------------
@@ -274,17 +355,87 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
   }
   check_kernel_mode("spawn_real");
 
-  return 0;
-}
+  int kidpid = fork1(name, spawn_launch, arg, stack_size, priority);
+
+  int slot = kidpid % MAXPROC;
+
+  ProcTable[slot].pid = kidpid;
+  strcpy(ProcTable[slot].name, name);
+  if (arg != NULL)
+  {
+    strcpy(ProcTable[slot].start_arg, arg);
+  }
+  ProcTable[slot].priority = priority;
+  ProcTable[slot].start_func = func;
+  ProcTable[slot].stack_size = stack_size;
+  ProcTable[slot].parent_pid = getpid();
+
+  add_child((int) getpid(), kidpid);
+
+  MboxSend(ProcTable[slot].start_mbox, NULL, 0);
+
+  if (is_zapped())
+  {
+    terminate_real(0);
+  }
+
+  return kidpid;
+} /* spawn_real */
+
 
 int wait_real(int *status)
 {
   return 0;
 }
 
-int terminate_real(int status)
+void terminate_real(int status)
 {
-  return 0;
+  if (debugflag3)
+  {
+    console("terminate_real(): started. clearing pid: %d\n", getpid());
+  }
+  check_kernel_mode("terminate_real");
+
+  proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
+
+  if (this_proc->num_children != 0)
+  {
+    proc_ptr child = this_proc->child_ptr;
+    int children[MAXPROC];
+    int i = 0;
+    while(child->next_sibling_ptr != NULL)
+    {
+      children[i++] = child->pid;
+      child = child->next_sibling_ptr;
+    }
+
+    for (int i = 0; i < this_proc->num_children; i++)
+    {
+      zap(children[i]);
+    }
+  }
+
+  //now remove this process from list of children
+  remove_child(this_proc->parent_pid, this_proc->pid);
+
+  //reset attrs
+  int slot = this_proc->pid % MAXPROC;
+  ProcTable[slot].child_ptr = NULL;
+  ProcTable[slot].next_sibling_ptr = NULL;
+  ProcTable[slot].name[0] = '\0';
+  ProcTable[slot].start_arg[0] = '\0';
+  ProcTable[slot].pid = -1;
+  ProcTable[slot].parent_pid = -1;
+  ProcTable[slot].priority = -1;
+  ProcTable[slot].start_func = NULL;
+  ProcTable[slot].stack_size = -1;
+  ProcTable[slot].num_children = 0;
+  MboxRelease(ProcTable[slot].start_mbox);
+  ProcTable[slot].start_mbox = MboxCreate(0, MAXLINE);
+
+  quit(status);
+
+  num_processes--;
 }
 
 int sem_create_real(int value)
@@ -320,16 +471,6 @@ int cputime_real()
 int getPID_real()
 {
   return getpid();
-}
-
-void add_child(int parent_id, int child_id)
-{
-  return;
-}
-
-void remove_child(int parent_id, int child_id)
-{
-  return;
 }
 
 int get_next_sem()
