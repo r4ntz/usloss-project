@@ -10,8 +10,9 @@
 #define START3_PID  4
 
 //status
-#define EMPTY 0
-#define ACTIVE 1
+#define EMPTY       0
+#define ACTIVE      1
+#define USED        2
 #define WAIT_BLOCK  11
 
 #endif
@@ -30,7 +31,7 @@ typedef struct proc_struct
   short         pid;
   short         parent_pid;
   int           priority;
-  int           (*func)(char *); //where process begins
+  int           (*start_func)(char *); //where process begins
   unsigned int  stack_size;
   int           num_children;
   int           status;

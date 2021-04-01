@@ -16,38 +16,38 @@
 #include <libuser.h>
 #include <usyscall.h>
 #include <stddef.h>
+#include <string.h>
 #include <phase1.h>
 #include <phase2.h>
 #include <phase3.h>
 
 
 /* ------------------------- Prototypes ----------------------------------- */
-int start2(char *);
-int spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority);
+extern int   start3(char *);
+
+static void nullsys3(sysargs *args);
+static void spawn(sysargs *args);
+static void wait(sysargs *args);
+static void terminate(sysargs *args);
+static void semCreate(sysargs *args);
+static void semP(sysargs *args);
+static void semV(sysargs *args);
+static void semFree(sysargs *args);
+static void getTimeOfDay(sysargs *args);
+static void cpuTime(sysargs *args);
+static void getPID(sysargs *args);
+
+int spawn_real(char *name, int(*func)(char *), char *arg, unsigned int stack_size, int priority);
+int spawn_launch(char *args);
 int wait_real(int *status);
-
-extern int Spawn(char *name, int (*func)(char *), char *arg, int stack_size, int priority, int *pid);
-extern int  Wait(int *pid, int *status);
-extern void Terminate(int status);
-extern void GetTimeofDay(int *tod);
-extern void CPUTime(int *cpu);
-extern void GetPID(int *pid);
-extern int  SemCreate(int value, int *semaphore);
-extern int  SemP(int semaphore);
-extern int  SemV(int semaphore);
-extern int  SemFree(int semaphore);
-extern int  spawn_real(char *name, int (*func)(char *), char *arg, int stack_size, int priority);
-extern int  wait_real(int *status);
-extern void terminate_real(int exit_code);
-extern int  semcreate_real(int init_value);
-extern int  semp_real(int semaphore);
-extern int  semv_real(int semaphore);
-extern int  semfree_real(int semaphore);
-extern int  gettimeofday_real(int *time);
-extern int  cputime_real(int *time);
-extern int  getPID_real(int *pid);
-
-extern int start3(char * arg);
+int terminate_real(int status);
+int sem_create_real(int value);
+int semp_real(int semID);
+int semv_real(int semID);
+int sem_free_real(int semID);
+int gettimeofday_real();
+int cputime_real();
+int getPID_real();
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -55,7 +55,59 @@ proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
 void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
+int next_sem = 0;
 /* -------------------------- Functions ----------------------------------- */
+
+/* ------------------------------------------------------------------------
+   Name - set_user_mode
+   Purpose - Sets current mode to user mode (non-Kernel mode)
+   Parameters - N/A
+   Returns - N/A
+   Side Effects - Affects processes which require kernel mode
+   ----------------------------------------------------------------------- */
+void set_user_mode()
+{
+  psr_set(psr_get() & ~PSR_CURRENT_MODE);
+} /* set_user_mode */
+
+
+/* ------------------------------------------------------------------------
+   Name - spawn_launch
+   Purpose - ??
+   Parameters - arg
+   Returns - ??
+   Side Effects - ??
+   ----------------------------------------------------------------------- */
+int spawn_launch(char * arg)
+{
+  int result = -1;
+
+  MboxReceive(ProcTable[getpid() % MAXPROC].start_mbox, NULL, 0);
+
+  proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
+
+  if (!is_zapped())
+  {
+    set_user_mode();
+    int (*func)(char *) = this_proc->start_func;
+    char arg[MAXARG];
+    strcpy(arg, this_proc->start_arg);
+
+    //run the function
+    result = (func)(arg);
+
+    // --
+    Terminate(result);
+  }
+  else
+  {
+      terminate_real(0);
+  }
+
+  console("spawn_launch(): should not see this message following Terminate!\n");
+  return 0;
+} /* spawn_launch */
+
 
 /* ------------------------------------------------------------------------
    Name - nullsys3
@@ -67,7 +119,7 @@ void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 static void nullsys3(sysargs * args_ptr)
 {
   console("nullsys3(): Invalid syscall %d\n", args_ptr->number);
-  console("nullsys3(): process %d terminating\n", GetPID());
+  console("nullsys3(): process %d terminating\n", getpid());
   terminate_real(1);
 } /* nullsys3 */
 
@@ -81,7 +133,7 @@ static void nullsys3(sysargs * args_ptr)
    ----------------------------------------------------------------------- */
 int start2(char *arg)
 {
-    int		pid;
+    int pid;
     int		status;
 
     //initialize sys_vec
@@ -90,16 +142,16 @@ int start2(char *arg)
       sys_vec[i] = nullsys3;
     }
 
-    sys_vec[SYS_SPAWN] =        Spawn;
-    sys_vec[SYS_WAIT] =         Wait;
-    sys_vec[SYS_TERMINATE] =    Terminate;
-    sys_vec[SYS_SEMCREATE] =    SemCreate;
-    sys_vec[SYS_SEMP] =         SemP;
-    sys_vec[SYS_SEMV] =         SemV;
-    sys_vec[SYS_SEMFREE] =      SemFree;
-    sys_vec[SYS_GETTIMEOFDAY] = GetTimeofDay;
-    sys_vec[SYS_CPUTIME] =      CPUTime;
-    sys_vec[SYS_GETPID] =       GetPID;
+    sys_vec[SYS_SPAWN] =        spawn;
+    sys_vec[SYS_WAIT] =         wait;
+    sys_vec[SYS_TERMINATE] =    terminate;
+    sys_vec[SYS_SEMCREATE] =    semCreate;
+    sys_vec[SYS_SEMP] =         semP;
+    sys_vec[SYS_SEMV] =         semV;
+    sys_vec[SYS_SEMFREE] =      semFree;
+    sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
+    sys_vec[SYS_CPUTIME] =      cpuTime;
+    sys_vec[SYS_GETPID] =       getPID;
 
     //initialize proc_table
     for (int i=0; i<MAXPROC; i++)
@@ -110,10 +162,10 @@ int start2(char *arg)
       ProcTable[i].next_sem_block =   NULL;
       ProcTable[i].name[0] =          '\0';
       ProcTable[i].start_arg[0] =     '\0';
-      ProcTable[i].pid =              -1
+      ProcTable[i].pid =              -1;
       ProcTable[i].parent_pid =       -1;
       ProcTable[i].priority =         -1;
-      ProcTable[i].func =             NULL;
+      ProcTable[i].start_func =             NULL;
       ProcTable[i].stack_size =       -1;
       ProcTable[i].num_children =     0;
       ProcTable[i].start_mbox =       MboxCreate(1, MAXLINE);
@@ -133,3 +185,127 @@ int start2(char *arg)
 
     return status;
 } /* start2 */
+
+static void spawn(sysargs *args)
+{
+  return;
+}
+
+static void wait(sysargs *args)
+{
+  return;
+}
+
+static void terminate(sysargs *args)
+{
+  return;
+}
+
+static void semCreate(sysargs *args)
+{
+  return;
+}
+
+static void semP(sysargs *args)
+{
+  return;
+}
+
+static void semV(sysargs *args)
+{
+  return;
+}
+
+static void semFree(sysargs *args)
+{
+  return;
+}
+
+static void getTimeOfDay(sysargs *args)
+{
+  return;
+}
+
+static void cpuTime(sysargs *args)
+{
+  return;
+}
+
+static void getPID(sysargs *args)
+{
+  return;
+}
+
+int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_size, int priority)
+{
+    return 0;
+}
+
+int wait_real(int *status)
+{
+  return 0;
+}
+
+int terminate_real(int status)
+{
+  return 0;
+}
+
+int sem_create_real(int value)
+{
+  return 0;
+}
+
+int semp_real(int semID)
+{
+  return 0;
+}
+
+int semv_real(int semID)
+{
+  return 0;
+}
+
+int sem_free_real(int semID)
+{
+  return 0;
+}
+
+int gettimeofday_real()
+{
+  return sys_clock();
+}
+
+int cputime_real()
+{
+  return readtime();
+}
+
+int getPID_real()
+{
+  return getpid();
+}
+
+void add_child(int parent_id, int child_id)
+{
+  return;
+}
+
+void remove_child(int parent_id, int child_id)
+{
+  return;
+}
+
+int get_next_sem()
+{
+  while(SemTable[next_sem].mutex_mbox != -1)
+  {
+    next_sem++;
+    if (next_sem >= MAXSEMS)
+    {
+      next_sem = 0;
+    }
+  }
+
+  return next_sem;
+}
