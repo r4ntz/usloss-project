@@ -12,11 +12,11 @@
 #include <usyscall.h>
 #include <usloss.h>
 
-#define CHECKMODE {						\
-	if (psr_get() & PSR_CURRENT_MODE) { 				\
+#define CHECKMODE {	\
+	if (psr_get() & PSR_CURRENT_MODE) {	\
 	    console("Trying to invoke syscall from kernel\n");	\
-	    halt(1);						\
-	}							\
+	    halt(1);	\
+	}	\
 }
 
 /*
@@ -36,10 +36,10 @@
  *
  */
 int Spawn(char *name, int (*func)(char *), char *arg, int stack_size,
-	int priority, int *pid)   
+	int priority, int *pid)
 {
     sysargs sa;
-    
+
     CHECKMODE;
     sa.number = SYS_SPAWN;
     sa.arg1 = (void *) func;
@@ -66,24 +66,24 @@ int Spawn(char *name, int (*func)(char *), char *arg, int stack_size,
  *  Return Value: 0 means success, -1 means error occurs
  *
  */
-int Wait(int *pid, int *status)	
+int Wait(int *pid, int *status)
 {
     sysargs sa;
-    
+
     CHECKMODE;
     sa.number = SYS_WAIT;
     usyscall(&sa);
     *pid = (int) sa.arg1;
     *status = (int) sa.arg2;
     return (int) sa.arg4;
-    
+
 } /* End of Wait */
 
 
 /*
  *  Routine:  Terminate
  *
- *  Description: This is the call entry to terminate 
+ *  Description: This is the call entry to terminate
  *               the invoking process and its children
  *
  *  Arguments:   int status -- the commpletion status of the process
@@ -94,13 +94,13 @@ int Wait(int *pid, int *status)
 void Terminate(int status)
 {
     sysargs sa;
-    
+
     CHECKMODE;
     sa.number = SYS_TERMINATE;
     sa.arg1 = (void *) status;
     usyscall(&sa);
     return;
-    
+
 } /* End of Terminate */
 
 
@@ -108,7 +108,7 @@ void Terminate(int status)
  *  Routine:  SemCreate
  *
  *  Description: Create a semaphore.
- *		
+ *
  *
  *  Arguments:    int value -- initial semaphore value
  *		  int *semaphore -- semaphore handle
@@ -132,7 +132,7 @@ int SemCreate(int value, int *semaphore)
  *  Routine:  SemP
  *
  *  Description: "P" a semaphore.
- *		
+ *
  *
  *  Arguments:    int semaphore -- semaphore handle
  *                (output value: completion status)
@@ -154,7 +154,7 @@ int SemP(int semaphore)
  *  Routine:  SemV
  *
  *  Description: "V" a semaphore.
- *		
+ *
  *
  *  Arguments:    int semaphore -- semaphore handle
  *                (output value: completion status)
@@ -176,7 +176,7 @@ int SemV(int semaphore)
  *  Routine:  SemFree
  *
  *  Description: Free a semaphore.
- *		
+ *
  *
  *  Arguments:    int semaphore -- semaphore handle
  *                (output value: completion status)
@@ -203,10 +203,10 @@ int SemFree(int semaphore)
  *                (output value: the time of day)
  *
  */
-void GetTimeofDay(int *tod)                           
+void GetTimeofDay(int *tod)
 {
     sysargs sa;
-    
+
     CHECKMODE;
     sa.number = SYS_GETTIMEOFDAY;
     usyscall(&sa);
@@ -219,13 +219,13 @@ void GetTimeofDay(int *tod)
  *  Routine:  CPUTime
  *
  *  Description: This is the call entry point for the process' CPU time.
- *		
+ *
  *
  *  Arguments:    int *cpu  -- pointer to output value
  *                (output value: the CPU time of the process)
  *
  */
-void CPUTime(int *cpu)                           
+void CPUTime(int *cpu)
 {
     sysargs sa;
 
@@ -241,13 +241,13 @@ void CPUTime(int *cpu)
  *  Routine:  GetPID
  *
  *  Description: This is the call entry point for the process' PID.
- *		
+ *
  *
  *  Arguments:    int *pid  -- pointer to output value
  *                (output value: the PID)
  *
  */
-void GetPID(int *pid)                           
+void GetPID(int *pid)
 {
     sysargs sa;
 
