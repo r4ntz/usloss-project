@@ -372,6 +372,10 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
 
   add_child((int) getpid(), kidpid);
 
+  if (debugflag3)
+  {
+    console("spawn_real(): sending message\n");
+  }
   MboxSend(ProcTable[slot].start_mbox, NULL, 0);
 
   if (is_zapped())
@@ -385,7 +389,20 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
 
 int wait_real(int *status)
 {
-  return 0;
+  if (debugflag3)
+  {
+    console("wait_real(): started\n");
+  }
+  check_kernel_mode("wait_real");
+
+  int result = join(status);
+
+  if(is_zapped())
+  {
+    terminate_real(0);
+  }
+
+  return result;
 }
 
 void terminate_real(int status)
