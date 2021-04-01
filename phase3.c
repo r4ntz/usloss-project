@@ -55,8 +55,26 @@ proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
 void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
+int debugflag3 = 1;
 int next_sem = 0;
 /* -------------------------- Functions ----------------------------------- */
+
+/* ------------------------------------------------------------------------
+   Name - check_kernel_mode
+   Purpose - Checks mode. Used before enabling and disabling interrupts
+   Parameters - None
+   Returns - Nothing
+   Side Effects - If we are not currently in kernel mode, this halts
+   ----------------------------------------------------------------------- */
+void check_kernel_mode(char * function_name)
+{
+	if ((PSR_CURRENT_MODE & psr_get()) == 0)
+	{
+		console("Kernel Error: %s() not in kernel mode.\n", function_name);
+		halt(1);
+	}
+} /*check_kernel_mode */
+
 
 /* ------------------------------------------------------------------------
    Name - set_user_mode
@@ -80,6 +98,12 @@ void set_user_mode()
    ----------------------------------------------------------------------- */
 int spawn_launch(char * arg)
 {
+  if (debugflag3)
+  {
+    console("spawn_launch(): starting\n");
+  }
+  check_kernel_mode("spawn_launch");
+
   int result = -1;
 
   MboxReceive(ProcTable[getpid() % MAXPROC].start_mbox, NULL, 0);
@@ -133,57 +157,63 @@ static void nullsys3(sysargs * args_ptr)
    ----------------------------------------------------------------------- */
 int start2(char *arg)
 {
-    int pid;
-    int		status;
+  if (debugflag3)
+  {
+    console("start2(): starting\n");
+  }
+  check_kernel_mode("start2");
 
-    //initialize sys_vec
-    for (int i=0; i<MAXSYSCALLS; i++)
-    {
-      sys_vec[i] = nullsys3;
-    }
+  int pid;
+  int		status;
 
-    sys_vec[SYS_SPAWN] =        spawn;
-    sys_vec[SYS_WAIT] =         wait;
-    sys_vec[SYS_TERMINATE] =    terminate;
-    sys_vec[SYS_SEMCREATE] =    semCreate;
-    sys_vec[SYS_SEMP] =         semP;
-    sys_vec[SYS_SEMV] =         semV;
-    sys_vec[SYS_SEMFREE] =      semFree;
-    sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
-    sys_vec[SYS_CPUTIME] =      cpuTime;
-    sys_vec[SYS_GETPID] =       getPID;
+  //initialize sys_vec
+  for (int i=0; i<MAXSYSCALLS; i++)
+  {
+    sys_vec[i] = nullsys3;
+  }
 
-    //initialize proc_table
-    for (int i=0; i<MAXPROC; i++)
-    {
-      ProcTable[i].child_ptr =        NULL;
-      ProcTable[i].next_sibling_ptr = NULL;
-      ProcTable[i].parent_ptr =       NULL;
-      ProcTable[i].next_sem_block =   NULL;
-      ProcTable[i].name[0] =          '\0';
-      ProcTable[i].start_arg[0] =     '\0';
-      ProcTable[i].pid =              -1;
-      ProcTable[i].parent_pid =       -1;
-      ProcTable[i].priority =         -1;
-      ProcTable[i].start_func =             NULL;
-      ProcTable[i].stack_size =       -1;
-      ProcTable[i].num_children =     0;
-      ProcTable[i].start_mbox =       MboxCreate(1, MAXLINE);
-    }
+  sys_vec[SYS_SPAWN] =        spawn;
+  sys_vec[SYS_WAIT] =         wait;
+  sys_vec[SYS_TERMINATE] =    terminate;
+  sys_vec[SYS_SEMCREATE] =    semCreate;
+  sys_vec[SYS_SEMP] =         semP;
+  sys_vec[SYS_SEMV] =         semV;
+  sys_vec[SYS_SEMFREE] =      semFree;
+  sys_vec[SYS_GETTIMEOFDAY] = getTimeOfDay;
+  sys_vec[SYS_CPUTIME] =      cpuTime;
+  sys_vec[SYS_GETPID] =       getPID;
 
-    //initialize sem_table
-    for (int i=0; i<MAXSEMS; i++)
-    {
-      SemTable[i].mutex_mbox = -1;
-      SemTable[i].block_mbox = -1;
-      SemTable[i].value =       0;
-      SemTable[i].blocked =     0;
-    }
+  //initialize proc_table
+  for (int i=0; i<MAXPROC; i++)
+  {
+    ProcTable[i].child_ptr =        NULL;
+    ProcTable[i].next_sibling_ptr = NULL;
+    ProcTable[i].parent_ptr =       NULL;
+    ProcTable[i].next_sem_block =   NULL;
+    ProcTable[i].name[0] =          '\0';
+    ProcTable[i].start_arg[0] =     '\0';
+    ProcTable[i].pid =              -1;
+    ProcTable[i].parent_pid =       -1;
+    ProcTable[i].priority =         -1;
+    ProcTable[i].start_func =             NULL;
+    ProcTable[i].stack_size =       -1;
+    ProcTable[i].num_children =     0;
+    ProcTable[i].start_mbox =       MboxCreate(1, MAXLINE);
+  }
 
-    pid = spawn_real("start3", start3, NULL, 4*USLOSS_MIN_STACK, 3);
-    pid = wait_real(&status);
+  //initialize sem_table
+  for (int i=0; i<MAXSEMS; i++)
+  {
+    SemTable[i].mutex_mbox = -1;
+    SemTable[i].block_mbox = -1;
+    SemTable[i].value =       0;
+    SemTable[i].blocked =     0;
+  }
 
-    return status;
+  pid = spawn_real("start3", start3, NULL, 4*USLOSS_MIN_STACK, 3);
+  pid = wait_real(&status);
+
+  return status;
 } /* start2 */
 
 static void spawn(sysargs *args)
@@ -238,7 +268,13 @@ static void getPID(sysargs *args)
 
 int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_size, int priority)
 {
-    return 0;
+  if (debugflag3)
+  {
+    console("spawn_real(): starting\n");
+  }
+  check_kernel_mode("spawn_real");
+
+  return 0;
 }
 
 int wait_real(int *status)
