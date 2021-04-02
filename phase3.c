@@ -103,12 +103,11 @@ void add_child(int parent_id, int child_id)
   {
     console("add_child(): adding child with pid: %d and parent: %d\n", parent_id, child_id);
   }
-  check_kernel_mode("add_child");
 
   parent_id = parent_id % MAXPROC;
   child_id =  child_id % MAXPROC;
 
-  ProcTable[parent_id].num_children--;
+  ProcTable[parent_id].num_children++;
 
   if (ProcTable[parent_id].child_ptr == NULL)
   {
@@ -141,7 +140,6 @@ void remove_child(int parent_id, int child_id)
   {
     console("remove_child(): removing child with pid: %d and parent: %d\n", child_id, parent_id);
   }
-  check_kernel_mode("remove_child");
 
   parent_id = parent_id % MAXPROC;
 
@@ -183,7 +181,6 @@ int spawn_launch(char * arg)
   {
     console("spawn_launch(): starting\n");
   }
-  check_kernel_mode("spawn_launch");
 
   int result = -1;
 
@@ -292,6 +289,7 @@ int start2(char *arg)
   }
 
   pid = spawn_real("start3", start3, NULL, 4*USLOSS_MIN_STACK, 3);
+
   pid = wait_real(&status);
 
   return status;
@@ -299,51 +297,136 @@ int start2(char *arg)
 
 static void spawn(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("spawn(): starting\n");
+  }
+
+  num_processes++;
+
+  char *name;
+  int (*func)(char *);
+  char *arg;
+  int stack_size;
+  int priority;
+
+  if (num_processes > MAXPROC)
+  {
+    args->arg4 = (void *) -1;
+    num_processes--;
+    return;
+  }
+
+  name = args->arg5;
+  func = args->arg1;
+  arg = args->arg2;
+  stack_size = (int) args->arg3;
+  priority = (int) args->arg4;
+
+  int pid = spawn_real(name, func, arg, stack_size, priority);
+
+  args->arg1 = (void *) pid;
+  args->arg4 = (void *) 0;
+
+  set_user_mode();
   return;
 }
 
 static void wait(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("wait(): starting\n");
+  }
+  int code;
+  int result = wait_real(&code);
+
+  int success = 0;
+  if (result == -2)
+  {
+    success = -1;
+  }
+
+  args->arg1 = (void *) result;
+  args->arg2 = (void *) code;
+  args->arg4 = (void *) success;
+
+  set_user_mode();
   return;
 }
 
 static void terminate(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("terminate(): starting\n");
+  }
+  int code = (int) args->arg1;
+  terminate_real(code);
+  set_user_mode();
   return;
 }
 
 static void semCreate(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("semCreate(): starting\n");
+  }
   return;
 }
 
 static void semP(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("semP(): starting\n");
+  }
   return;
 }
 
 static void semV(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("semV(): starting\n");
+  }
   return;
 }
 
 static void semFree(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("semFree(): starting\n");
+  }
   return;
 }
 
 static void getTimeOfDay(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("getTimeOfDay(): starting\n");
+  }
   return;
 }
 
 static void cpuTime(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("cpuTime(): starting\n");
+  }
   return;
 }
 
 static void getPID(sysargs *args)
 {
+  if (debugflag3)
+  {
+    console("getPID(): starting\n");
+  }
   return;
 }
 
@@ -353,7 +436,6 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
   {
     console("spawn_real(): starting\n");
   }
-  check_kernel_mode("spawn_real");
 
   int kidpid = fork1(name, spawn_launch, arg, stack_size, priority);
 
@@ -393,7 +475,6 @@ int wait_real(int *status)
   {
     console("wait_real(): started\n");
   }
-  check_kernel_mode("wait_real");
 
   int result = join(status);
 
@@ -411,7 +492,6 @@ void terminate_real(int status)
   {
     console("terminate_real(): started. clearing pid: %d\n", getpid());
   }
-  check_kernel_mode("terminate_real");
 
   proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
 
@@ -420,6 +500,7 @@ void terminate_real(int status)
     proc_ptr child = this_proc->child_ptr;
     int children[MAXPROC];
     int i = 0;
+
     while(child->next_sibling_ptr != NULL)
     {
       children[i++] = child->pid;
@@ -449,7 +530,7 @@ void terminate_real(int status)
   ProcTable[slot].num_children = 0;
   MboxRelease(ProcTable[slot].start_mbox);
   ProcTable[slot].start_mbox = MboxCreate(0, MAXLINE);
-
+  
   quit(status);
 
   num_processes--;
@@ -457,41 +538,74 @@ void terminate_real(int status)
 
 int sem_create_real(int value)
 {
+  if (debugflag3)
+  {
+    console("sem_create_real(): starting\n");
+  }
   return 0;
 }
 
 int semp_real(int semID)
 {
+  if (debugflag3)
+  {
+    console("semp_real(): starting\n");
+  }
   return 0;
 }
 
 int semv_real(int semID)
 {
+  if (debugflag3)
+  {
+    console("semv_real(): starting\n");
+  }
   return 0;
 }
 
 int sem_free_real(int semID)
 {
+  if (debugflag3)
+  {
+    console("sem_free_real(): starting\n");
+  }
   return 0;
 }
 
 int gettimeofday_real()
 {
+  if (debugflag3)
+  {
+    console("gettimeofday_real(): starting\n");
+  }
   return sys_clock();
 }
 
 int cputime_real()
 {
+  if (debugflag3)
+  {
+    console("cputime_real(): starting\n");
+  }
   return readtime();
 }
 
 int getPID_real()
 {
+  if (debugflag3)
+  {
+    console("getPID_real(): starting\n");
+  }
   return getpid();
 }
 
 int get_next_sem()
 {
+  if (debugflag3)
+  {
+    console("get_next_sem(): starting\n");
+  }
+
   while(SemTable[next_sem].mutex_mbox != -1)
   {
     next_sem++;
