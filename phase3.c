@@ -397,6 +397,12 @@ static void semP(sysargs *args)
   {
     console("semP(): starting\n");
   }
+
+  int sem_id = (int) args->arg1;
+  int result = semp_real(sem_id);
+
+  args->arg4 = (void *) result;
+
   return;
 }
 
@@ -406,6 +412,12 @@ static void semV(sysargs *args)
   {
     console("semV(): starting\n");
   }
+
+  int sem_id = (int) args->arg1;
+  int result = semv_real(sem_id);
+
+  args->arg4 = (void *) result;
+
   return;
 }
 
@@ -415,6 +427,18 @@ static void semFree(sysargs *args)
   {
     console("semFree(): starting\n");
   }
+
+  int sem_id = (int) args->arg1;
+  if (sem_id == -1)
+  {
+    args->arg4 = (void *) -1;
+  }
+  else
+  {
+    int result = sem_free_real(sem_id);
+    args->arg4 = (void *) result;
+  }
+
   return;
 }
 
@@ -424,6 +448,10 @@ static void getTimeOfDay(sysargs *args)
   {
     console("getTimeOfDay(): starting\n");
   }
+
+  int result = gettimeofday_real();
+  args->arg1 = (void *) result;
+
   return;
 }
 
@@ -433,6 +461,10 @@ static void cpuTime(sysargs *args)
   {
     console("cpuTime(): starting\n");
   }
+
+  int result = cputime_real();
+  args->arg1 = (void *) result;
+
   return;
 }
 
@@ -442,6 +474,9 @@ static void getPID(sysargs *args)
   {
     console("getPID(): starting\n");
   }
+  int result = getPID_real();
+  args->arg1 = (void *) result;
+
   return;
 }
 
@@ -605,31 +640,137 @@ int sem_create_real(int value)
   return sem;
 }
 
-int semp_real(int semID)
+int semp_real(int sem_id)
 {
   if (debugflag3)
   {
     console("semp_real(): starting\n");
   }
+
+  if (SemTable[sem_id].mutex_mbox == -1)
+  {
+    return -1;
+  }
+
+  int mutex_mbox = SemTable[sem_id].mutex_mbox;
+  int blocked_mbox = SemTable[sem_id].block_mbox;
+
+  MboxSend(mutex_mbox, NULL, 0);
+
+  int broke = 0;
+  while (SemTable[sem_id].value <=0)
+  {
+    SemTable[sem_id].blocked++;
+    MboxReceive(mutex_mbox, NULL, 0);
+    MboxSend(blocked_mbox, NULL, 0);
+
+    if (is_zapped())
+    {
+      terminate_real(0);
+    }
+
+    if (SemTable[sem_id].mutex_mbox == -1)
+    {
+      broke = 1;
+      break;
+    }
+
+    MboxSend(mutex_mbox, NULL, 0);
+  }
+
+  if (!broke)
+  {
+    SemTable[sem_id].value--;
+    MboxReceive(mutex_mbox, NULL, 0);
+  }
+
+  else
+  {
+    terminate_real(1);
+  }
+
   return 0;
 }
 
-int semv_real(int semID)
+int semv_real(int sem_id)
 {
   if (debugflag3)
   {
     console("semv_real(): starting\n");
   }
+
+  if (SemTable[sem_id].mutex_mbox == -1)
+  {
+    return -1;
+  }
+
+  int mutex_mbox = SemTable[sem_id].mutex_mbox;
+  int blocked_mbox = SemTable[sem_id].block_mbox;
+
+  MboxSend(mutex_mbox, NULL, 0);
+  SemTable[sem_id].value++;
+
+  //check for blocked processes
+  if (SemTable[sem_id].blocked > 0)
+  {
+    MboxReceive(blocked_mbox, NULL, 0);
+    SemTable[sem_id].blocked--;
+  }
+
+  MboxReceive(mutex_mbox, NULL, 0);
+
+  if (is_zapped())
+  {
+    terminate_real(0);
+  }
+
   return 0;
 }
 
-int sem_free_real(int semID)
+int sem_free_real(int sem_id)
 {
   if (debugflag3)
   {
     console("sem_free_real(): starting\n");
   }
-  return 0;
+
+  if (SemTable[sem_id].mutex_mbox == -1)
+  {
+    return -1;
+  }
+
+  SemTable[sem_id].mutex_mbox = -1;
+
+  int result = 0;
+
+  //if there are blocked processes wake them up
+  if (SemTable[sem_id].blocked > 0)
+  {
+    result = 1;
+    int i = 0;
+    while (i < SemTable[sem_id].blocked)
+    {
+      MboxReceive(SemTable[sem_id].block_mbox, NULL, 0);
+      i++;
+    }
+  }
+
+  //remove and release sems
+  SemTable[sem_id].block_mbox = -1;
+  SemTable[sem_id].value = -1;
+  SemTable[sem_id].blocked = 0;
+
+  MboxRelease(SemTable[sem_id].mutex_mbox);
+  MboxRelease(SemTable[sem_id].block_mbox);
+
+  if (is_zapped())
+  {
+    terminate_real(0);
+  }
+
+  num_sems--;
+
+  return result;
 }
 
 int gettimeofday_real()
