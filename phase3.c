@@ -55,7 +55,8 @@ proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
 void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
-int debugflag3 = 1;
+int debugflag3 = 0;
+int num_sems = 0;
 int next_sem = 0;
 int num_processes = 3;
 /* -------------------------- Functions ----------------------------------- */
@@ -373,6 +374,20 @@ static void semCreate(sysargs *args)
   {
     console("semCreate(): starting\n");
   }
+
+  int address = sem_create_real((int) args->arg1);
+
+  if (address == -1)
+  {
+    args->arg4 = (void *) -1;
+    args->arg1 = NULL;
+  }
+  else
+  {
+    args->arg4 = 0;
+    args->arg1 = (void *) address;
+  }
+
   return;
 }
 
@@ -530,10 +545,29 @@ void terminate_real(int status)
   ProcTable[slot].num_children = 0;
   MboxRelease(ProcTable[slot].start_mbox);
   ProcTable[slot].start_mbox = MboxCreate(0, MAXLINE);
-  
+
   quit(status);
 
   num_processes--;
+}
+
+int get_next_sem()
+{
+  if (debugflag3)
+  {
+    console("get_next_sem(): starting\n");
+  }
+
+  while(SemTable[next_sem].mutex_mbox != -1)
+  {
+    next_sem++;
+    if (next_sem >= MAXSEMS)
+    {
+      next_sem = 0;
+    }
+  }
+
+  return next_sem;
 }
 
 int sem_create_real(int value)
@@ -542,7 +576,33 @@ int sem_create_real(int value)
   {
     console("sem_create_real(): starting\n");
   }
-  return 0;
+
+  // --
+  if (num_sems > MAXSEMS)
+  {
+    return -1;
+  }
+
+  int mutex_mbox = MboxCreate(1, 0);
+  if(mutex_mbox == -1)
+  {
+    return -1;
+  }
+
+  int blocked_mbox = MboxCreate(0, 0);
+  if (blocked_mbox == -1)
+  {
+    return -1;
+  }
+
+  num_sems++;
+  int sem = get_next_sem();
+  SemTable[sem].mutex_mbox = mutex_mbox;
+  SemTable[sem].block_mbox = blocked_mbox;
+  SemTable[sem].value = value;
+  SemTable[sem].blocked = 0;
+
+  return sem;
 }
 
 int semp_real(int semID)
@@ -597,23 +657,4 @@ int getPID_real()
     console("getPID_real(): starting\n");
   }
   return getpid();
-}
-
-int get_next_sem()
-{
-  if (debugflag3)
-  {
-    console("get_next_sem(): starting\n");
-  }
-
-  while(SemTable[next_sem].mutex_mbox != -1)
-  {
-    next_sem++;
-    if (next_sem >= MAXSEMS)
-    {
-      next_sem = 0;
-    }
-  }
-
-  return next_sem;
 }
