@@ -544,20 +544,28 @@ void terminate_real(int status)
 
   proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
 
+  //check if there are any children
   if (this_proc->num_children != 0)
   {
     proc_ptr child = this_proc->child_ptr;
     int children[MAXPROC];
     int i = 0;
 
-    while(child->next_sibling_ptr != NULL)
+    if (this_proc->num_children == 1) children[0] = child->pid;
+
+    else
     {
-      children[i++] = child->pid;
-      child = child->next_sibling_ptr;
+      while(child->next_sibling_ptr != NULL)
+      {
+        if (debugflag3) console("terminate_real(): found child pid: %d\n", child->pid);
+        children[i++] = child->pid;
+        child = child->next_sibling_ptr;
+      }
     }
 
     for (int i = 0; i < this_proc->num_children; i++)
     {
+      if (debugflag3) console("terminate_real(): zapping child pid: %d\n", children[i]);
       zap(children[i]);
     }
   }
