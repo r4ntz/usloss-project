@@ -52,7 +52,6 @@ extern int   start3(char *);
 /* -------------------------- Globals ------------------------------------- */
 proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
-void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
 int debugflag3 = 1;
 int num_sems = 0;
@@ -103,6 +102,7 @@ void add_child(int parent_id, int child_id)
   {
     console("add_child(): adding child with pid: %d and parent: %d\n", parent_id, child_id);
   }
+  check_kernel_mode("add_child");
 
   parent_id = parent_id % MAXPROC;
   child_id =  child_id % MAXPROC;
@@ -140,6 +140,7 @@ void remove_child(int parent_id, int child_id)
   {
     console("remove_child(): removing child with pid: %d and parent: %d\n", child_id, parent_id);
   }
+  check_kernel_mode("remove_child");
 
   parent_id = parent_id % MAXPROC;
 
@@ -183,6 +184,7 @@ int spawn_launch(char * arg)
   {
     console("spawn_launch(): starting\n");
   }
+  console("spawn_launch()");
 
   int result = -1;
 
@@ -303,6 +305,7 @@ static void spawn(sysargs *args)
   {
     console("spawn(): starting\n");
   }
+  check_kernel_mode("spawn");
 
   num_processes++;
 
@@ -340,6 +343,8 @@ static void wait(sysargs *args)
   {
     console("wait(): starting\n");
   }
+  check_kernel_mode("wait");
+
   int code;
   int result = wait_real(&code);
 
@@ -363,6 +368,8 @@ static void terminate(sysargs *args)
   {
     console("terminate(): starting\n");
   }
+  check_kernel_mode("terminate");
+
   int code = (int) args->arg1;
   terminate_real(code);
   set_user_mode();
@@ -375,18 +382,20 @@ static void semCreate(sysargs *args)
   {
     console("semCreate(): starting\n");
   }
+  check_kernel_mode("semCreate");
 
-  int address = sem_create_real((int) args->arg1);
+  //int address = sem_create_real((int) args->arg1);
+  int value = (int) args->arg1;
 
-  if (address == -1)
+  if (value < 0 || num_sems == MAXSEMS)
   {
     args->arg4 = (void *) -1;
-    args->arg1 = NULL;
   }
   else
   {
+    int handle = sem_create_real(value);
     args->arg4 = 0;
-    args->arg1 = (void *) address;
+    args->arg1 = (void *) handle;
   }
 
   return;
@@ -413,11 +422,19 @@ static void semV(sysargs *args)
   {
     console("semV(): starting\n");
   }
+  check_kernel_mode("semV");
 
   int sem_id = (int) args->arg1;
-  int result = semv_real(sem_id);
+  if (sem_id < 0)
+  {
+    args->arg4 = (void *) (int) -1;
+  }
+  else
+  {
+    args->arg4 = 0;
+  }
 
-  args->arg4 = (void *) result;
+  semv_real(sem_id);
 
   return;
 }
@@ -487,6 +504,7 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
   {
     console("spawn_real(): starting\n");
   }
+  check_kernel_mode("spawn_real");
 
   int kidpid = fork1(name, spawn_launch, arg, stack_size, priority);
 
@@ -524,20 +542,11 @@ int wait_real(int *status)
 {
   if (debugflag3)
   {
-    console("wait_real(): started. curr pid: %d\n", getpid());
+    console("wait_real(): started. curr pid: %d - parent pid: %d\n", getpid(), ProcTable[getpid() % MAXPROC].parent_pid);
   }
 
-  if (ProcTable[getpid() % MAXPROC].num_children > 0)
-  {
-    console("children found\n");
-    proc_ptr child = ProcTable[getpid() % MAXPROC].child_ptr;
-    console("name: %s\tpid: %d\t status: %d\n", child->name, child->pid, child->status);
-    while (child->next_sibling_ptr != NULL)
-    {
-      child = child->next_sibling_ptr;
-      console("name: %s\tpid: %d\t status: %d\n", child->name, child->pid, child->status);
-    }
-  }
+  //if (debugflag3) dump_processes();
+
   int result = join(status);
 
 
@@ -579,12 +588,11 @@ void terminate_real(int status)
 
     for (int i = 0; i < this_proc->num_children; i++)
     {
-      if (debugflag3) console("terminate_real(): zapping child pid: %d\n", children[i]);
+      if (debugflag3) console("terminate_real(): zapping children[%d] pid: %d\n", i, children[i]);
       zap(children[i]);
     }
   }
 
-  //now remove this process from list of children
   remove_child(this_proc->parent_pid, this_proc->pid);
 
   //reset attrs
@@ -644,6 +652,7 @@ int sem_create_real(int value)
   {
     console("sem_create_real(): starting\n");
   }
+  check_kernel_mode("sem_create_real()");
 
   // --
   if (num_sems > MAXSEMS)
@@ -657,7 +666,7 @@ int sem_create_real(int value)
     return -1;
   }
 
-  int blocked_mbox = MboxCreate(0, 0);
+  int blocked_mbox = MboxCreate(value, 0);
   if (blocked_mbox == -1)
   {
     return -1;
@@ -679,6 +688,7 @@ int semp_real(int sem_id)
   {
     console("semp_real(): starting\n");
   }
+  check_kernel_mode("semp_real");
 
   if (SemTable[sem_id].mutex_mbox == -1)
   {
@@ -731,6 +741,7 @@ int semv_real(int sem_id)
   {
     console("semv_real(): starting\n");
   }
+  check_kernel_mode("semv_real");
 
   if (SemTable[sem_id].mutex_mbox == -1)
   {
@@ -749,6 +760,7 @@ int semv_real(int sem_id)
     MboxReceive(blocked_mbox, NULL, 0);
     SemTable[sem_id].blocked--;
   }
+  else SemTable[sem_id].blocked++;
 
   MboxReceive(mutex_mbox, NULL, 0);
 
@@ -766,6 +778,7 @@ int sem_free_real(int sem_id)
   {
     console("sem_free_real(): starting\n");
   }
+  check_kernel_mode("sem_free_real");
 
   if (SemTable[sem_id].mutex_mbox == -1)
   {
