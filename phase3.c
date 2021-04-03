@@ -54,7 +54,7 @@ proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
 void (*sys_vec[MAXSYSCALLS])(sysargs * args);
 
-int debugflag3 = 0;
+int debugflag3 = 1;
 int num_sems = 0;
 int next_sem = 0;
 int num_processes = 3;
@@ -147,11 +147,13 @@ void remove_child(int parent_id, int child_id)
 
   if (ProcTable[parent_id].child_ptr->pid == child_id)
   {
+    if (debugflag3) console("remove_child(): child is head. removing\n");
     ProcTable[parent_id].child_ptr = ProcTable[parent_id].child_ptr->next_sibling_ptr;
   }
 
   else
   {
+    if (debugflag3) console("remove_child(): searching for child to remove\n");
     proc_ptr child = ProcTable[parent_id].child_ptr;
 
     while(child->next_sibling_ptr != NULL)
@@ -522,10 +524,22 @@ int wait_real(int *status)
 {
   if (debugflag3)
   {
-    console("wait_real(): started\n");
+    console("wait_real(): started. curr pid: %d\n", getpid());
   }
 
+  if (ProcTable[getpid() % MAXPROC].num_children > 0)
+  {
+    console("children found\n");
+    proc_ptr child = ProcTable[getpid() % MAXPROC].child_ptr;
+    console("name: %s\tpid: %d\t status: %d\n", child->name, child->pid, child->status);
+    while (child->next_sibling_ptr != NULL)
+    {
+      child = child->next_sibling_ptr;
+      console("name: %s\tpid: %d\t status: %d\n", child->name, child->pid, child->status);
+    }
+  }
   int result = join(status);
+
 
   if(is_zapped())
   {
@@ -575,6 +589,7 @@ void terminate_real(int status)
 
   //reset attrs
   int slot = this_proc->pid % MAXPROC;
+
   ProcTable[slot].child_ptr = NULL;
   ProcTable[slot].next_sibling_ptr = NULL;
   ProcTable[slot].name[0] = '\0';
