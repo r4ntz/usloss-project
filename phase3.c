@@ -23,8 +23,6 @@
 
 
 /* ------------------------- Prototypes ----------------------------------- */
-extern int   start3(char *);
-
 static void nullsys3(sysargs *args);
 static void spawn(sysargs *args);
 static void wait(sysargs *args);
@@ -49,6 +47,7 @@ int gettimeofday_real();
 int cputime_real();
 int getPID_real();
 
+extern int   start3(char *);
 
 /* -------------------------- Globals ------------------------------------- */
 proc_struct ProcTable[MAXPROC];
@@ -596,10 +595,21 @@ int get_next_sem()
   while(SemTable[next_sem].mutex_mbox != -1)
   {
     next_sem++;
-    if (next_sem >= MAXSEMS)
+    if (debugflag3)
     {
-      next_sem = 0;
+      console("get_next_sem(): mutex_mbox is: %d - next_sem is: %d\n", SemTable[next_sem].mutex_mbox, next_sem);
     }
+    if ((next_sem) >= MAXSEMS)
+    {
+      if (debugflag3) console("get_next_sem(): reached MAXSEMS. resetting to -1\n");
+      next_sem = -1;
+      break;
+    }
+  }
+
+  if (debugflag3)
+  {
+    console("get_next_sem(): returning next_sem: %d\n", next_sem);
   }
 
   return next_sem;
@@ -779,7 +789,9 @@ int gettimeofday_real()
   {
     console("gettimeofday_real(): starting\n");
   }
-  return sys_clock();
+  int time = sys_clock();
+
+  return time;
 }
 
 int cputime_real()
