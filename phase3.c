@@ -100,7 +100,7 @@ void add_child(int parent_id, int child_id)
 {
   if (debugflag3)
   {
-    console("add_child(): adding child with pid: %d and parent: %d\n", parent_id, child_id);
+    console("add_child(): adding child with pid: %d and parent: %d\n", child_id, parent_id);
   }
   check_kernel_mode("add_child");
 
@@ -111,6 +111,7 @@ void add_child(int parent_id, int child_id)
 
   if (ProcTable[parent_id].child_ptr == NULL)
   {
+    if (debugflag3) console("add_child(): adding parent's first child\n");
     ProcTable[parent_id].child_ptr = &ProcTable[child_id];
   }
 
@@ -120,6 +121,11 @@ void add_child(int parent_id, int child_id)
     while (child->next_sibling_ptr != NULL)
     {
       child = child->next_sibling_ptr;
+    }
+
+    if (debugflag3)
+    {
+      console("add_child(): inserting %d's sibling %d\n", child->pid, child_id);
     }
 
     child->next_sibling_ptr = &ProcTable[child_id];
@@ -184,16 +190,16 @@ int spawn_launch(char * arg)
   {
     console("spawn_launch(): starting\n");
   }
-  console("spawn_launch()");
 
   int result = -1;
 
-  MboxReceive(ProcTable[getpid() % MAXPROC].start_mbox, NULL, 0);
+  MboxReceive(ProcTable[getpid() % MAXPROC].start_mbox, 0, 0);
 
   proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
 
   if (!is_zapped())
   {
+    if (debugflag3) console("spawn_launch(): setting up process\n");
     set_user_mode();
     int (*func)(char *) = this_proc->start_func;
     char arg[MAXARG];
@@ -345,18 +351,14 @@ static void wait(sysargs *args)
   }
   check_kernel_mode("wait");
 
-  int code;
-  int result = wait_real(&code);
-
-  int success = 0;
-  if (result == -2)
-  {
-    success = -1;
-  }
+  int * status = args->arg2;
+  int result = wait_real(status);
 
   args->arg1 = (void *) result;
-  args->arg2 = (void *) code;
-  args->arg4 = (void *) success;
+  args->arg2 = (void *) status;
+  args->arg4 = (void *) (int) 0;
+
+  if (is_zapped()) terminate_real(1);
 
   set_user_mode();
   return;
@@ -527,7 +529,7 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
   {
     console("spawn_real(): sending message\n");
   }
-  MboxSend(ProcTable[slot].start_mbox, NULL, 0);
+  MboxSend(ProcTable[slot].start_mbox, 0, 0);
 
   if (is_zapped())
   {
@@ -545,7 +547,7 @@ int wait_real(int *status)
     console("wait_real(): started. curr pid: %d - parent pid: %d\n", getpid(), ProcTable[getpid() % MAXPROC].parent_pid);
   }
 
-  //if (debugflag3) dump_processes();
+  if (debugflag3) dump_processes();
 
   int result = join(status);
 
@@ -570,26 +572,14 @@ void terminate_real(int status)
   //check if there are any children
   if (this_proc->num_children != 0)
   {
+    if (debugflag3) console("terminate_real(): there are %d children. collecting and zapping\n", this_proc->num_children);
     proc_ptr child = this_proc->child_ptr;
-    int children[MAXPROC];
-    int i = 0;
 
-    if (this_proc->num_children == 1) children[0] = child->pid;
-
-    else
+    for(; child != NULL; child = child->next_sibling_ptr)
     {
-      while(child->next_sibling_ptr != NULL)
-      {
-        if (debugflag3) console("terminate_real(): found child pid: %d\n", child->pid);
-        children[i++] = child->pid;
-        child = child->next_sibling_ptr;
-      }
-    }
-
-    for (int i = 0; i < this_proc->num_children; i++)
-    {
-      if (debugflag3) console("terminate_real(): zapping children[%d] pid: %d\n", i, children[i]);
-      zap(children[i]);
+      if (debugflag3) console("terminate_real(): found child pid: %d\n", child->pid);
+      remove_child(this_proc->pid, child->pid);
+      zap(child->pid);
     }
   }
 
@@ -698,14 +688,14 @@ int semp_real(int sem_id)
   int mutex_mbox = SemTable[sem_id].mutex_mbox;
   int blocked_mbox = SemTable[sem_id].block_mbox;
 
-  MboxSend(mutex_mbox, NULL, 0);
+  MboxSend(mutex_mbox, 0, 0);
 
   int broke = 0;
   while (SemTable[sem_id].value <=0)
   {
     SemTable[sem_id].blocked++;
-    MboxReceive(mutex_mbox, NULL, 0);
-    MboxSend(blocked_mbox, NULL, 0);
+    MboxReceive(mutex_mbox, 0, 0);
+    MboxSend(blocked_mbox, 0, 0);
 
     if (is_zapped())
     {
@@ -718,13 +708,13 @@ int semp_real(int sem_id)
       break;
     }
 
-    MboxSend(mutex_mbox, NULL, 0);
+    MboxSend(mutex_mbox, 0, 0);
   }
 
   if (!broke)
   {
     SemTable[sem_id].value--;
-    MboxReceive(mutex_mbox, NULL, 0);
+    MboxReceive(mutex_mbox, 0, 0);
   }
 
   else
@@ -751,18 +741,18 @@ int semv_real(int sem_id)
   int mutex_mbox = SemTable[sem_id].mutex_mbox;
   int blocked_mbox = SemTable[sem_id].block_mbox;
 
-  MboxSend(mutex_mbox, NULL, 0);
+  MboxSend(mutex_mbox, 0, 0);
   SemTable[sem_id].value++;
 
   //check for blocked processes
   if (SemTable[sem_id].blocked > 0)
   {
-    MboxReceive(blocked_mbox, NULL, 0);
+    MboxReceive(blocked_mbox, 0, 0);
     SemTable[sem_id].blocked--;
   }
   else SemTable[sem_id].blocked++;
 
-  MboxReceive(mutex_mbox, NULL, 0);
+  MboxReceive(mutex_mbox, 0, 0);
 
   if (is_zapped())
   {
@@ -796,7 +786,7 @@ int sem_free_real(int sem_id)
     int i = 0;
     while (i < SemTable[sem_id].blocked)
     {
-      MboxReceive(SemTable[sem_id].block_mbox, NULL, 0);
+      MboxReceive(SemTable[sem_id].block_mbox, 0, 0);
       i++;
     }
   }
