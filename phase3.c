@@ -53,7 +53,7 @@ extern int   start3(char *);
 proc_struct ProcTable[MAXPROC];
 sem_struct  SemTable[MAXSEMS];
 
-int debugflag3 = 1;
+int debugflag3 = 0;
 int num_sems = 0;
 int next_sem = 0;
 int num_processes = 3;
@@ -130,6 +130,9 @@ void add_child(int parent_id, int child_id)
 
     child->next_sibling_ptr = &ProcTable[child_id];
   }
+
+  ProcTable[child_id].parent_ptr = &ProcTable[parent_id];
+
 } /* add_child */
 
 
@@ -147,8 +150,6 @@ void remove_child(int parent_id, int child_id)
     console("remove_child(): removing child with pid: %d and parent: %d\n", child_id, parent_id);
   }
   check_kernel_mode("remove_child");
-
-  parent_id = parent_id % MAXPROC;
 
   ProcTable[parent_id].num_children--;
 
@@ -277,7 +278,6 @@ int start2(char *arg)
     ProcTable[i].child_ptr =        NULL;
     ProcTable[i].next_sibling_ptr = NULL;
     ProcTable[i].parent_ptr =       NULL;
-    ProcTable[i].next_sem_block =   NULL;
     ProcTable[i].name[0] =          '\0';
     ProcTable[i].start_arg[0] =     '\0';
     ProcTable[i].pid =              -1;
@@ -323,16 +323,16 @@ static void spawn(sysargs *args)
 
   if (num_processes > MAXPROC)
   {
-    args->arg4 = (void *) -1;
+    args->arg1 = (void *) -1;
     num_processes--;
     return;
   }
 
-  name = args->arg5;
   func = args->arg1;
   arg = args->arg2;
   stack_size = (int) args->arg3;
   priority = (int) args->arg4;
+  name = args->arg5;
 
   int pid = spawn_real(name, func, arg, stack_size, priority);
 
@@ -351,12 +351,13 @@ static void wait(sysargs *args)
   }
   check_kernel_mode("wait");
 
-  int * status = args->arg2;
-  int result = wait_real(status);
+  int status;
+  int pid = wait_real(&status);
 
-  args->arg1 = (void *) result;
+  args->arg1 = (void *) pid;
   args->arg2 = (void *) status;
-  args->arg4 = (void *) (int) 0;
+  if (pid < 0) args->arg4 = (void *) -1;
+  else args->arg4 = (void *) 0;
 
   if (is_zapped()) terminate_real(1);
 
@@ -510,6 +511,11 @@ int spawn_real(char *name, int(*func)(char *arg), char *arg, unsigned int stack_
 
   int kidpid = fork1(name, spawn_launch, arg, stack_size, priority);
 
+  if (kidpid < 0)
+  {
+    return -1;
+  }
+
   int slot = kidpid % MAXPROC;
 
   ProcTable[slot].pid = kidpid;
@@ -547,10 +553,7 @@ int wait_real(int *status)
     console("wait_real(): started. curr pid: %d - parent pid: %d\n", getpid(), ProcTable[getpid() % MAXPROC].parent_pid);
   }
 
-  if (debugflag3) dump_processes();
-
   int result = join(status);
-
 
   if(is_zapped())
   {
