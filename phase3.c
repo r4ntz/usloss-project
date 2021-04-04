@@ -153,6 +153,8 @@ void remove_child(int parent_id, int child_id)
 
   ProcTable[parent_id].num_children--;
 
+  if (ProcTable[parent_id].child_ptr == NULL) return;
+
   if (ProcTable[parent_id].child_ptr->pid == child_id)
   {
     if (debugflag3) console("remove_child(): child is head. removing\n");
@@ -373,8 +375,8 @@ static void terminate(sysargs *args)
   }
   check_kernel_mode("terminate");
 
-  int code = (int) args->arg1;
-  terminate_real(code);
+  int pid = (int) args->arg1;
+  terminate_real(pid);
   set_user_mode();
   return;
 }
@@ -573,17 +575,24 @@ void terminate_real(int status)
   proc_ptr this_proc = &ProcTable[getpid() % MAXPROC];
 
   //check if there are any children
-  if (this_proc->num_children != 0)
+  while (1)
   {
-    if (debugflag3) console("terminate_real(): there are %d children. collecting and zapping\n", this_proc->num_children);
     proc_ptr child = this_proc->child_ptr;
-
-    for(; child != NULL; child = child->next_sibling_ptr)
+    if (child == NULL) break;
+    else
     {
-      if (debugflag3) console("terminate_real(): found child pid: %d\n", child->pid);
-      remove_child(this_proc->pid, child->pid);
+      if (debugflag3)
+      {
+        console("terminate_real(): found child. removing and zapping, pid: %d\n", child->pid);
+      }
+      remove_child(this_proc->pid, this_proc->child_ptr->pid);
       zap(child->pid);
     }
+  }
+
+  if (debugflag3)
+  {
+    console("terminate_real(): removing process from parent and clearing attrs, pid: %d\n", getpid());
   }
 
   remove_child(this_proc->parent_pid, this_proc->pid);
@@ -593,6 +602,7 @@ void terminate_real(int status)
 
   ProcTable[slot].child_ptr = NULL;
   ProcTable[slot].next_sibling_ptr = NULL;
+  ProcTable[slot].parent_ptr = NULL;
   ProcTable[slot].name[0] = '\0';
   ProcTable[slot].start_arg[0] = '\0';
   ProcTable[slot].pid = -1;
@@ -604,9 +614,15 @@ void terminate_real(int status)
   MboxRelease(ProcTable[slot].start_mbox);
   ProcTable[slot].start_mbox = MboxCreate(0, MAXLINE);
 
+  num_processes--;
+
+  if (debugflag3)
+  {
+    console("terminate_real(): process quitting, pid: %d\n", getpid());
+  }
+
   quit(status);
 
-  num_processes--;
 }
 
 int get_next_sem()
