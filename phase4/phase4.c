@@ -40,31 +40,39 @@ void diskread(sysargs *);
 void diskwrite(sysargs *);
 void disksize(sysargs *);
 
+extern int start4(char *);
+
 
 /* -------------------------- Functions ----------------------------------- */
 
 void sleep(sysargs * args)
 {
+        if (DEBUG4 && debugflag4) console("sleep(): starting\n");
         return;
 }
 
 void diskread(sysargs * args)
 {
+        if (DEBUG4 && debugflag4) console("diskread(): starting\n");
         return;
 }
 
 void diskwrite(sysargs * args)
 {
+        if (DEBUG4 && debugflag4) console("diskwrite(): starting\n");
         return;
 }
 
 void disksize(sysargs * args)
 {
+        if (DEBUG4 && debugflag4) console("disksize(): starting\n");
         return;
 }
 
 int start3(char *arg)
 {
+        if (DEBUG4 && debugflag4) console("start3(): starting\n");
+
         char name[128];
         char termbuf[10];
         int i;
@@ -79,9 +87,9 @@ int start3(char *arg)
 
         /* Assignment system call handlers */
         sys_vec[SYS_SLEEP]     = sleep;
-        sys_vec[SYS_DISKREAD] = diskread;
+        sys_vec[SYS_DISKREAD]  = diskread;
         sys_vec[SYS_DISKWRITE] = diskwrite;
-        sys_vec[SYS_DISKSIZE] = disksize;
+        sys_vec[SYS_DISKSIZE]  = disksize;
 
         //more for this phase's system call handlings
 
@@ -118,6 +126,7 @@ int start3(char *arg)
          * the stack size depending on the complexity of your
          * driver, and perhaps do something with the pid returned.
          */
+        if (DEBUG4 && debugflag4) console("start3(): creating disk drivers\n");
 
         for (i = 0; i < DISK_UNITS; i++)
         {
@@ -157,6 +166,8 @@ int start3(char *arg)
 
 static int ClockDriver(char *arg)
 {
+        if (DEBUG4 && debugflag4) console("ClockDriver(): starting\n");
+
         int result;
         int status;
 
@@ -181,6 +192,8 @@ static int ClockDriver(char *arg)
 
 static int DiskDriver(char *arg)
 {
+        if (DEBUG4 && debugflag4) console("DiskDriver(): starting\n");
+
         int unit = atoi(arg);
         device_request my_request;
         int result;
