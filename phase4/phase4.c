@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <strings.h>
+#include <string.h>
 #include <usloss.h>
 #include <phase1.h>
 #include <phase2.h>
@@ -27,13 +28,41 @@
 static int running; /*semaphore to synchronize drivers and start3*/
 static struct driver_proc Driver_Table[MAXPROC];
 static int diskpids[DISK_UNITS];
+static int num_tracks[DISK_UNITS];
+int debugflag4 = 1;
 
 /* ------------------------- Prototypes ----------------------------------- */
 static int  ClockDriver(char *);
 static int  DiskDriver(char *);
+int start3(char *);
+void sleep(sysargs *);
+void diskread(sysargs *);
+void diskwrite(sysargs *);
+void disksize(sysargs *);
 
 
 /* -------------------------- Functions ----------------------------------- */
+
+void sleep(sysargs * args)
+{
+        return;
+}
+
+void diskread(sysargs * args)
+{
+        return;
+}
+
+void diskwrite(sysargs * args)
+{
+        return;
+}
+
+void disksize(sysargs * args)
+{
+        return;
+}
+
 int start3(char *arg)
 {
         char name[128];
@@ -49,7 +78,11 @@ int start3(char *arg)
 
 
         /* Assignment system call handlers */
-        sys_vec[SYS_SLEEP]     = sleep_first;
+        sys_vec[SYS_SLEEP]     = sleep;
+        sys_vec[SYS_DISKREAD] = diskread;
+        sys_vec[SYS_DISKWRITE] = diskwrite;
+        sys_vec[SYS_DISKSIZE] = disksize;
+
         //more for this phase's system call handlings
 
 
@@ -62,19 +95,22 @@ int start3(char *arg)
          * be used instead -- your choice.
          */
         running = semcreate_real(0);
-
         clockPID = fork1("Clock driver", ClockDriver, NULL, USLOSS_MIN_STACK, 2);
+
         if (clockPID < 0)
         {
                 console("start3(): Can't create clock driver\n");
                 halt(1);
         }
 
+        strcpy(Driver_Table[clockPID % MAXPROC].name, "Clock driver");
+        Driver_Table[clockPID % MAXPROC].pid = clockPID;
+        Driver_Table[clockPID % MAXPROC].status = ACTIVE;
+
         /*
          * Wait for the clock driver to start. The idea is that ClockDriver
          * will V the semaphore "running" once it is running.
          */
-
         semp_real(running);
 
         /*
@@ -85,9 +121,9 @@ int start3(char *arg)
 
         for (i = 0; i < DISK_UNITS; i++)
         {
-                sprintf(buf, "%d", i);
+                sprintf(termbuf, "%d", i);
                 sprintf(name, "DiskDriver%d", i);
-                diskpids[i] = fork1(name, DiskDriver, buf, USLOSS_MIN_STACK, 2);
+                diskpids[i] = fork1(name, DiskDriver, termbuf, USLOSS_MIN_STACK, 2);
                 if (diskpids[i] < 0)
                 {
                         console("start3(): Can't create disk driver %d\n", i);
@@ -114,6 +150,8 @@ int start3(char *arg)
          */
         zap(clockPID); // clock driver
         join(&status); /* for the Clock Driver */
+
+        return 0;
 }
 
 
@@ -137,6 +175,8 @@ static int ClockDriver(char *arg)
                  * whose time has come.
                  */
         }
+
+        return 0;
 }
 
 static int DiskDriver(char *arg)
