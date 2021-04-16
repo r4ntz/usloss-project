@@ -192,7 +192,6 @@ static int ClockDriver(char *arg)
 
 static int DiskDriver(char *arg)
 {
-        if (DEBUG4 && debugflag4) console("DiskDriver(): starting\n");
 
         int unit = atoi(arg);
         device_request my_request;
