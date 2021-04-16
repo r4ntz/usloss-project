@@ -9,6 +9,7 @@
 
    ------------------------------------------------------------------------ */
 
+/* ------------------------- Includes ----------------------------------- */
 #include <stdlib.h>
 #include <stdio.h>
 #include <strings.h>
@@ -21,15 +22,18 @@
 #include <provided_prototypes.h>
 #include "driver.h"
 
+
+/* -------------------------- Globals ------------------------------------- */
 static int running; /*semaphore to synchronize drivers and start3*/
-
 static struct driver_proc Driver_Table[MAXPROC];
-
 static int diskpids[DISK_UNITS];
 
+/* ------------------------- Prototypes ----------------------------------- */
 static int  ClockDriver(char *);
 static int  DiskDriver(char *);
 
+
+/* -------------------------- Functions ----------------------------------- */
 int start3(char *arg)
 {
         char name[128];
