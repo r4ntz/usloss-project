@@ -1,0 +1,4 @@
+#!/bin/csh
+
+cp testcases/disk0.orig disk0
+cp testcases/disk1.orig disk1
