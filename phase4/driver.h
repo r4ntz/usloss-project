@@ -23,5 +23,7 @@ struct driver_proc
         char name[MAXNAME];
         int pid;
         int status;
+        int sleep_sem;
+        driver_proc_ptr next_sleep;
 
 };

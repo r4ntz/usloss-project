@@ -29,25 +29,86 @@ static int running; /*semaphore to synchronize drivers and start3*/
 static struct driver_proc Driver_Table[MAXPROC];
 static int diskpids[DISK_UNITS];
 static int num_tracks[DISK_UNITS];
+driver_proc_ptr sleepQ;
 int debugflag4 = 1;
 
 /* ------------------------- Prototypes ----------------------------------- */
 static int  ClockDriver(char *);
 static int  DiskDriver(char *);
 int start3(char *);
+void check_kernel_mode(char *);
 void sleep(sysargs *);
+int sleep_real(int);
 void diskread(sysargs *);
 void diskwrite(sysargs *);
 void disksize(sysargs *);
+void termread(sysargs *);
+void termwrite(sysargs *);
 
 extern int start4(char *);
 
 
 /* -------------------------- Functions ----------------------------------- */
+void check_kernel_mode(char * function_name)
+{
+        if ((PSR_CURRENT_MODE & psr_get()) == 0)
+        {
+                console("Kernel Error: %s() not in kernel mode.\n", function_name);
+                halt(1);
+        }
+}
+
+int sleep_real(int seconds)
+{
+        if (DEBUG4 && debugflag4)
+        {
+                console("sleep_real(): starting. seconds: %d\n", seconds);
+        }
+
+        //get and assign wake_time which is sys_clock + seconds
+        int wake_time = sys_clock() + (seconds * 1000000);
+        int pid = 0;
+        getPID_real(&pid);
+        Driver_Table[pid % MAXPROC].wake_time = wake_time;
+
+        if (sleepQ == NULL || sleepQ->wake_time > wake_time)
+        {
+                if (sleepQ == NULL) sleepQ = &Driver_Table[pid % MAXPROC];
+                else
+                {
+                        Driver_Table[pid % MAXPROC].next_sleep = sleepQ;
+                        sleepQ = &Driver_Table[pid % MAXPROC];
+                }
+        }
+        else
+        {
+                driver_proc_ptr walker = sleepQ;
+                driver_proc_ptr prev = NULL;
+                while (walker != NULL && walker->wake_time < wake_time)
+                {
+                        prev = walker;
+                        walker = walker->next_sleep;
+                }
+
+                prev->next_sleep = &Driver_Table[pid % MAXPROC];
+                Driver_Table[pid % MAXPROC].next_sleep = walker;
+        }
+
+        semp_real(Driver_Table[pid % MAXPROC].sleep_sem);
+
+        return 0;
+
+}
 
 void sleep(sysargs * args)
 {
         if (DEBUG4 && debugflag4) console("sleep(): starting\n");
+        int seconds = (int) args->arg1;
+        int status = sleep_real(seconds);
+
+        if (status == 1) args->arg4 = (void *) -1;
+        else args->arg4 = (void *) 0;
+
         return;
 }
 
@@ -69,9 +130,22 @@ void disksize(sysargs * args)
         return;
 }
 
+void termread(sysargs * args)
+{
+        if (DEBUG4 && debugflag4) console("termread(): starting\n");
+        return;
+}
+
+void termwrite(sysargs * args)
+{
+        if (DEBUG4 && debugflag4) console("termwrite(): starting\n");
+        return;
+}
+
 int start3(char *arg)
 {
         if (DEBUG4 && debugflag4) console("start3(): starting\n");
+        check_kernel_mode("start3");
 
         char name[128];
         char termbuf[10];
@@ -90,8 +164,8 @@ int start3(char *arg)
         sys_vec[SYS_DISKREAD]  = diskread;
         sys_vec[SYS_DISKWRITE] = diskwrite;
         sys_vec[SYS_DISKSIZE]  = disksize;
-
-        //more for this phase's system call handlings
+        sys_vec[SYS_TERMREAD]  = termread;
+        sys_vec[SYS_TERMWRITE] = termwrite;
 
 
         /* Initialize the phase 4 process table */
@@ -126,6 +200,7 @@ int start3(char *arg)
          * the stack size depending on the complexity of your
          * driver, and perhaps do something with the pid returned.
          */
+
         if (DEBUG4 && debugflag4) console("start3(): creating disk drivers\n");
 
         for (i = 0; i < DISK_UNITS; i++)
@@ -139,9 +214,6 @@ int start3(char *arg)
                         halt(1);
                 }
         }
-
-        semp_real(running);
-        semp_real(running);
 
 
         /*
@@ -217,8 +289,12 @@ static int DiskDriver(char *arg)
         }
 
         waitdevice(DISK_DEV, unit, &status);
+
         if (DEBUG4 && debugflag4)
+        {
                 console("DiskDriver(%d): tracks = %d\n", unit, num_tracks[unit]);
+        }
+
 
 
         //more code
