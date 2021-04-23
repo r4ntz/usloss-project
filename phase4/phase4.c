@@ -375,15 +375,89 @@ void disksize(sysargs * args)
         return;
 }
 
+int termread_real(int unit, int size, char * buffer)
+{
+  if (DEBUG4 && debugflag4) console("termread_real(): starting\n");
+
+  char line[MAXLINE];
+
+  //check for line
+  int result = MboxReceive(line_read[unit], line, size);
+
+  memcpy(buffer, line, size);
+
+  //check result
+  if (result < 0) return -1;
+
+  return result;
+
+}
 void termread(sysargs * args)
 {
         if (DEBUG4 && debugflag4) console("termread(): starting\n");
+
+        char * buffer = (char *) args->arg1;
+        int size = (int) args->arg2;
+        int unit = (int) args->arg3;
+
+        int status = termread_real(unit, size, buffer);
+
+        //check status
+        if (status == -1)
+        {
+                args->arg4 = (void *) -1;
+                return;
+        }
+
+        //set args
+        args->arg2 = (void *) status;
+        args->arg4 = (void *) 0;
+
         return;
+}
+
+int termwrite_real(int unit, int size, char * buffer)
+{
+    if (DEBUG4 && debugflag4) console("termwrite_real(): starting\n");
+
+    //send pid
+    char pid[10];
+    sprintf(pid, "%d", getpid());
+    MboxSend(pid_box[unit], pid, sizeof(int));
+
+    //send text
+    int result = MboxSend(line_write[unit], buffer, size);
+
+    //check result
+    if (result < 0) return -1;
+
+    //block until done
+    semp_real(Driver_Table[getpid() % MAXPROC].term_sem);
+
+    return result;
 }
 
 void termwrite(sysargs * args)
 {
         if (DEBUG4 && debugflag4) console("termwrite(): starting\n");
+
+        char * buffer = (char *) args->arg1;
+        int size = (int) args->arg2;
+        int unit = (int) args->arg3;
+
+        //check size
+        int status = termwrite_real(unit, size, buffer);
+
+        //check status
+        if (status == -1)
+        {
+          args->arg4 = (void *) -1;
+          return;
+        }
+
+        //set args
+        args->arg2 = (void *) status;
+        args->arg4 = (void *) 0;
         return;
 }
 static int ClockDriver(char *arg)
