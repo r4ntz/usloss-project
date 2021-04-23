@@ -3,6 +3,7 @@
 #define ACTIVE 1
 
 typedef struct driver_proc * driver_proc_ptr;
+typedef struct request * request_ptr;
 
 struct driver_proc
 {
@@ -24,6 +25,19 @@ struct driver_proc
         int pid;
         int status;
         int sleep_sem;
+        int term_sem;
+        int disk_sem;
         driver_proc_ptr next_sleep;
 
+};
+
+struct request
+{
+        int track;
+        int start_sector;
+        int num_sectors;
+        int waiting_pid;
+        void * buffer;
+        int req_type;
+        request_ptr next_req;
 };
