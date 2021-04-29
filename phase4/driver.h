@@ -1,17 +1,30 @@
-#define DEBUG4 1
+#define DEBUG4  1
 
-#define ACTIVE 1
+//for process table
+#define EMPTY   0
+#define ACTIVE  1
 
 typedef struct driver_proc * driver_proc_ptr;
-typedef struct request * request_ptr;
+typedef struct proc_struct * proc_ptr;
 
-struct driver_proc
+typedef struct proc_struct
 {
+        proc_ptr sleep_ptr; //sleep queue
+
+        int wake_time;
+        char name[MAXNAME];
+        char start_arg[MAXARG];
+        int pid;
+        int (*func)(char *);
+        int status;
+        int mbox_id;
+} proc_struct;
+
+typedef struct driver_proc {
         driver_proc_ptr next_ptr;
 
         int wake_time; /* for sleep syscall */
         int been_zapped;
-
 
         /* Used for disk requests */
         int operation; /* DISK_READ, DISK_WRITE, DISK_SEEK, DISK_TRACKS */
@@ -21,23 +34,8 @@ struct driver_proc
         void *disk_buf;
 
         //more fields to add
-        char name[MAXNAME];
-        int pid;
+        int mbox_id;
         int status;
-        int sleep_sem;
-        int term_sem;
-        int disk_sem;
-        driver_proc_ptr next_sleep;
+        int unit;
 
-};
-
-struct request
-{
-        int track;
-        int start_sector;
-        int num_sectors;
-        int waiting_pid;
-        void * buffer;
-        int req_type;
-        request_ptr next_req;
-};
+} driver_proc;

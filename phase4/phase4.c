@@ -1,5 +1,6 @@
+
 /* ------------------------------------------------------------------------
-   phase4.c
+   phase3.c
 
    University of Arizona South
    Computer Science 452
@@ -7,16 +8,13 @@
 
    Rantz Marion & Mark Whitson
 
-   TO-DO: finish termread, termwrite, their real equivalents, debug,
-   clean up any unused or ambigiuous variables, add new functions to prototypes
-
    ------------------------------------------------------------------------ */
 
 /* ------------------------- Includes ----------------------------------- */
 #include <stdlib.h>
 #include <stdio.h>
-#include <strings.h>
 #include <string.h>
+#include <strings.h>
 #include <usloss.h>
 #include <phase1.h>
 #include <phase2.h>
@@ -26,48 +24,59 @@
 #include <provided_prototypes.h>
 #include "driver.h"
 
-
 /* -------------------------- Globals ------------------------------------- */
-static int running; /*semaphore to synchronize drivers and start3*/
-static struct driver_proc Driver_Table[MAXPROC];
-request_ptr topQ[DISK_UNITS];
-request_ptr bottomQ[DISK_UNITS];
-static int diskpids[DISK_UNITS];
-static int disk_sem[DISK_UNITS];
-static int disk_req[DISK_UNITS];
-static int disk_arm[DISK_UNITS];
-static int termpids[TERM_UNITS][3];
-static int num_tracks[DISK_UNITS];
-driver_proc_ptr sleepQ;
-int debugflag4 = 1;
+int debugflag4 = 0;
 
-int terminate_disk;
-int terminate_clock;
-int terminate_term;
+static int running; /*semaphore to synchronize drivers and start3*/
+
+proc_struct Proc_Table[MAXPROC];
+int disksems[DISK_UNITS];
 
 int char_receive[TERM_UNITS];
 int char_send[TERM_UNITS];
-int line_read[TERM_UNITS];
-int line_write[TERM_UNITS];
-int pid_box[TERM_UNITS];
+
+int line_receive[TERM_UNITS];
+int line_send[TERM_UNITS];
+
+int user_write_boxes[TERM_UNITS];
+
+int num_tracks[DISK_UNITS];
+
+proc_ptr sleepQ;
+
+driver_proc_ptr diskQ[DISK_UNITS];
 
 /* ------------------------- Prototypes ----------------------------------- */
-static int  ClockDriver(char *);
-static int  DiskDriver(char *);
-int start3(char *);
 void check_kernel_mode(char *);
+void set_user_mode(void);
+void disableInterrupts();
+void enableInterrupts();
+int start3(char *);
 void sleep(sysargs *);
 int sleep_real(int);
-void diskread(sysargs *);
-void diskwrite(sysargs *);
-void disksize(sysargs *);
-void termread(sysargs *);
-void termwrite(sysargs *);
+void disk_read(sysargs *);
+int diskread_real(int, int, int, int, void *);
+void disk_write(sysargs *);
+int diskwrite_real(int, int, int, int, void *);
+void disk_size(sysargs *);
+int disksize_real(int, int *, int *, int *);
+void term_read(sysargs *);
+int termread_real(int, int, char *);
+void term_write(sysargs *);
+int termwrite_real(int, int, char *);
+void insert_process();
+void remove_process();
+int diskread_handler(int);
+int diskwrite_handler(int);
+int dev_output(device_request *, int);
+void insert_diskreq(driver_proc_ptr);
+static int  ClockDriver(char *);
+static int  DiskDriver(char *);
+static int TermDriver(char *);
 
 extern int start4(char *);
-
-
 /* -------------------------- Functions ----------------------------------- */
+
 void check_kernel_mode(char * function_name)
 {
         if ((PSR_CURRENT_MODE & psr_get()) == 0)
@@ -77,669 +86,580 @@ void check_kernel_mode(char * function_name)
         }
 }
 
-void enable_interrupts()
+void set_user_mode()
+{
+        psr_set(psr_get() & ~PSR_CURRENT_MODE);
+}
+
+void disableInterrupts()
+{
+        psr_set(psr_get() | PSR_CURRENT_INT);
+}
+
+void enableInterrupts()
 {
         psr_set(psr_get() & ~PSR_CURRENT_INT);
 }
 
-void disable_interrupts()
+void add_process()
 {
-        psr_set(psr_get() | PSR_CURRENT_INT);
+        if (getpid() != Proc_Table[getpid() % MAXPROC].pid)
+        {
+                Proc_Table[getpid() % MAXPROC].pid = getpid();
+                Proc_Table[getpid() % MAXPROC].status = ACTIVE;
+                Proc_Table[getpid() % MAXPROC].mbox_id = MboxCreate(0,0);
+                Proc_Table[getpid() % MAXPROC].sleep_ptr = NULL;
+        }
+
+        return;
+
+}
+
+void remove_process()
+{
+        MboxRelease(Proc_Table[getpid() % MAXPROC].mbox_id);
+        Proc_Table[getpid() % MAXPROC].pid = -1;
+        Proc_Table[getpid() % MAXPROC].status = EMPTY;
+        Proc_Table[getpid() % MAXPROC].mbox_id = -1;
+        Proc_Table[getpid() % MAXPROC].sleep_ptr = NULL;
+
+        return;
+}
+
+int TermReader(char * arg)
+{
+        int unit = atoi(arg);
+        char line[MAXLINE + 1];
+        int index = 0;
+        char buffer;
+
+        while (1) {
+                // get char from driver
+                MboxReceive(char_receive[unit], &buffer, sizeof(char));
+
+                if (is_zapped()) return 0;
+
+                // apend char to line
+                line[index] = buffer;
+                index++;
+
+                // send line to mailbox when line is complete
+                if (buffer == '\n' || index >= MAXLINE) {
+                        line[index] = 0;
+                        MboxCondSend(line_receive[unit], (void *) line, MAXLINE + 1);
+                        index = 0;
+                }
+        }
+}
+
+int TermWriter(char * arg)
+{
+        int unit = atoi(arg);
+        int chars;
+        char line[MAXLINE];
+        int control = 0;
+
+        /* Run while not zapped
+           block on mBoxRecieve and wait for termWriteReal to send the line
+           check to see if you are zapped, if so then return.
+           Get line and set a control int to XMIT and do a device output to enable writing.
+         */
+        while (!is_zapped()) {
+                chars = MboxReceive(line_send[unit], line, MAXLINE);
+                if (chars > MAXLINE) {
+                        chars = 80;
+                }
+                if (is_zapped()) {
+                        return 0;
+                }
+                for (int i = 0; i < chars; i++) {
+                        control = 0;
+                        control = TERM_CTRL_CHAR(control, line[i]);
+                        control = TERM_CTRL_XMIT_INT(control);
+                        control = TERM_CTRL_RECV_INT(control);
+                        control = TERM_CTRL_XMIT_CHAR(control);
+
+                        device_output(TERM_DEV, unit,((void *)(long) control));
+
+                        MboxReceive(char_send[unit], NULL, 0);
+                }
+                control = 2;
+                device_output(TERM_DEV, unit, &control);
+                //Send number of chars written to user
+                MboxSend(user_write_boxes[unit], &chars, sizeof(int));
+        }
+
+        return 0;
 }
 
 int sleep_real(int seconds)
 {
         if (DEBUG4 && debugflag4)
         {
-                console("sleep_real(): starting. seconds: %d\n", seconds);
+          console("sleep_real(): started. seconds: %d\n", seconds);
         }
 
-        //get and assign wake_time which is sys_clock + seconds
-        int wake_time = sys_clock() + (seconds * 1000000);
-        int pid = 0;
-        getPID_real(&pid);
-        Driver_Table[pid % MAXPROC].wake_time = wake_time;
+        if (seconds < 0) return -1;
 
-        //insert at front of queue if higher wake_time or if NULL
-        if (sleepQ == NULL || sleepQ->wake_time > wake_time)
+        add_process();
+        proc_ptr new_proc = &Proc_Table[getpid() % MAXPROC];
+
+        int wake_time = sys_clock() + (1000000 * seconds);
+        new_proc->wake_time = wake_time;
+
+        if (sleepQ == NULL)
         {
-                if (sleepQ == NULL) sleepQ = &Driver_Table[pid % MAXPROC];
+                sleepQ = new_proc;
+        }
+        else
+        {
+                proc_ptr prev = sleepQ;
+                if (new_proc->wake_time >= sleepQ->wake_time)
+                {
+                        proc_ptr walker = sleepQ->sleep_ptr;
+
+                        while (walker != NULL && new_proc->wake_time > walker->wake_time)
+                        {
+                                prev = prev->sleep_ptr;
+                                walker = walker->sleep_ptr;
+                        }
+                        prev->sleep_ptr = new_proc;
+                        new_proc->sleep_ptr = walker;
+                }
                 else
                 {
-                        Driver_Table[pid % MAXPROC].next_sleep = sleepQ;
-                        sleepQ = &Driver_Table[pid % MAXPROC];
+                        new_proc->sleep_ptr = prev;
+                        sleepQ = new_proc;
                 }
+        }
+
+        //block on private mbox
+        MboxReceive(Proc_Table[getpid() % MAXPROC].mbox_id, NULL, 0);
+
+        //remove from proc table
+        remove_process();
+
+        return 0;
+}
+
+void sleep(sysargs * arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("sleep(): started\n");
+        }
+
+        int seconds = (int) arg->arg1;
+        if (sleep_real(seconds) < 0)
+        {
+                arg->arg4 = (void *) -1;
         }
         else
         {
-                driver_proc_ptr walker = sleepQ;
-                driver_proc_ptr prev = NULL;
-                while (walker != NULL && walker->wake_time < wake_time)
-                {
-                        prev = walker;
-                        walker = walker->next_sleep;
-                }
-
-                prev->next_sleep = &Driver_Table[pid % MAXPROC];
-                Driver_Table[pid % MAXPROC].next_sleep = walker;
+                arg->arg4 = (void *) 0;
         }
-
-        semp_real(Driver_Table[pid % MAXPROC].sleep_sem);
-
-        return 0;
-
 }
 
-void sleep(sysargs * args)
+void add_driver_process(driver_proc_ptr some_proc)
 {
-        if (DEBUG4 && debugflag4) console("sleep(): starting\n");
-        int seconds = (int) args->arg1;
-        int status = sleep_real(seconds);
+        if (DEBUG4 && debugflag4)
+        {
+          console("add_driver_process(%d): started\n", some_proc->unit);
+        }
 
-        if (status == 1) args->arg4 = (void *) -1;
-        else args->arg4 = (void *) 0;
+        int unit = some_proc->unit;
+
+        if (diskQ[unit] == NULL)
+        {
+                diskQ[unit] = some_proc;
+        }
+        else
+        {
+                driver_proc_ptr prev = diskQ[unit];
+                driver_proc_ptr walker = diskQ[unit]->next_ptr;
+                if (some_proc->track_start > diskQ[unit]->track_start)
+                {
+                        while (walker != NULL && walker->track_start < some_proc->track_start &&
+                               walker->track_start > prev->track_start)
+                        {
+                                prev = prev->next_ptr;
+                                walker = walker->next_ptr;
+                        }
+                        prev->next_ptr = some_proc;
+                        some_proc->next_ptr = walker;
+                }
+        }
+}
+
+int termwrite_real(int unit, int buf_size, char * buf)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("termwrite_real(%d): started\n", unit);
+        }
+
+        int chars;
+        if (unit < 0 || unit > 3)
+        {
+                return -1;
+        }
+        if (buf_size < 0)
+        {
+                return -1;
+        }
+
+        MboxSend(line_send[unit], buf, buf_size);
+
+        MboxReceive(user_write_boxes[unit], &chars, sizeof(int));
+
+        return chars;
+}
+
+void term_write(sysargs * arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("term_write(): started\n");
+        }
+
+        int result;
+        int unit = (int) arg->arg3;
+        int buf_size = (int) arg->arg2;
+        char * buf = (char *) arg->arg1;
+
+        result = termwrite_real(unit, buf_size, buf);
+
+        arg->arg2 = (void *) result;
+
+        if (result == -1)
+        {
+                arg->arg4 = (void *) -1;
+        }
+        else
+        {
+                arg->arg4 = (void *) 0;
+        }
 
         return;
 }
 
-void diskreq(request_ptr req, int unit)
+int termread_real(int unit, int buf_size, char * buf)
 {
-        //find place to insert Q
-        request_ptr Q;
-        if (req->track > disk_arm[unit])
+        if (DEBUG4 && debugflag4)
         {
-                Q = topQ[unit];
+          console("termread_real(%d): started\n", unit);
+        }
+
+        if (unit < 0 || unit > 3)
+        {
+                return -1;
+        }
+        if (buf_size < 0)
+        {
+                return -1;
+        }
+
+        char buffer[MAXLINE + 1];
+        MboxReceive(line_receive[unit], buf, MAXLINE + 1);
+        int buf_length = strlen(buffer);
+        buffer[buf_length] = '\n';
+
+        if (buf_size < buf_length)
+        {
+                memcpy(buf, buffer, buf_size + 1);
+                return buf_length;
         }
         else
         {
-                Q = bottomQ[unit];
+                memcpy(buf, buffer, buf_length);
+                return buf_length;
         }
 
-        request_ptr walker = Q;
-        request_ptr prev = NULL;
-
-        //in the case where Q is empty
-        if (walker == NULL)
-        {
-                Q = req;
-                return;
-        }
-
-        while (walker != NULL && walker->track < req->track)
-        {
-                prev = walker;
-                walker = walker->next_req;
-        }
-        prev->next_req = req;
-        req->next_req = walker;
-
-        //wake up disk
-        semv_real(disk_sem[unit]);
+        return -1;
 }
 
-void disk_seek(int unit, int track)
+void term_read(sysargs * arg)
 {
-        if (DEBUG4 && debugflag4) console("disk_seek(): starting\n");
-
-        if (track >= num_tracks[unit])
+        if (DEBUG4 && debugflag4)
         {
-                halt(0);
-                return;
+          console("term_read(): started\n");
         }
+
+        int result;
+        int unit = (int) arg->arg3;
+        int buf_size = (int) arg->arg2;
+        char * buf = (char *) arg->arg1;
+
+        result = termread_real(unit, buf_size, buf);
+
+        arg->arg2 = (void *) result;
+
+        if (result == -1)
+        {
+                arg->arg4 = (void *) -1;
+        }
+        else
+        {
+                arg->arg4 = (void *) 0;
+        }
+}
+
+int disksize_real(int unit, int * sector_size, int * sectors_in_track, int * tracks_in_disk)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("disksize_real(%d): started\n", unit);
+        }
+
+        int status;
+        int result;
+
+        if (unit < 0 || unit > 1)
+        {
+                return -1;
+        }
+
+        add_process();
 
         device_request req;
-        req.opr = DISK_SEEK;
-        req.reg1 = (void *) track;
+        req.opr = DISK_TRACKS;
+        req.reg1 = (void *) tracks_in_disk;
 
         device_output(DISK_DEV, unit, &req);
-        int status;
-        int res = waitdevice(DISK_DEV, unit, &status);
-        if (DEBUG4 && debugflag4)
+        result = waitdevice(DISK_DEV, unit, &status);
+
+        if (status == DEV_ERROR)
         {
-                console("disk_seek(): waitdevice returned. status: %d\n", status);
+                return -1;
+        }
+        if (result != 0)
+        {
+                return -1;
         }
 
-        if (res != 0)
-        {
-                if (DEBUG4 && debugflag4) console("disk_seek(): waitdevice returned non zero value..\n");
-        }
+        *sector_size = DISK_SECTOR_SIZE;
+        *sectors_in_track = DISK_TRACK_SIZE;
 
-        return;
-}
-
-int diskread_real(int unit, int track, int first, int sectors, void * buffer)
-{
-        if (DEBUG4 && debugflag4) console("diskread_real(): starting\n");
-
-        request_ptr req;
-        req->track = track;
-        req->start_sector = first;
-        req->num_sectors = sectors;
-        req->waiting_pid = getpid();
-        req->buffer = &buffer;
-        req->req_type = DISK_READ;
-        req->next_req = NULL;
-
-        ///add request to queue
-        if (DEBUG4 && debugflag4)
-        {
-                console("diskread_real: adding to queue\n");
-        }
-
-        diskreq(req, unit);
-
-        //block calling process
-        if (DEBUG4 && debugflag4)
-        {
-                console("diskread_real: blocking calling process\n");
-        }
-
-        semp_real(Driver_Table[getpid() % MAXPROC].disk_sem);
+        remove_process();
 
         return 0;
 }
 
-void diskread(sysargs * args)
+void disk_size(sysargs * arg)
 {
-        if (DEBUG4 && debugflag4) console("diskread(): starting\n");
-
-        int sectors = (int) args->arg2;
-        int track = (int) args->arg3;
-        int first = (int) args->arg4;
-        int unit = (int) args->arg5;
-        void * buffer = args->arg1;
-
-        //perform read
-        int status = diskread_real(unit, track, first, sectors, buffer);
-
-        //check for bad input
-        if (status == -1)
-        {
-                args->arg4 = (void *) -1;
-                return;
-        }
-
-        args->arg1 = (void *) status;
-        args->arg4 = (void *) 0;
-
-        return;
-}
-
-int diskwrite_real(int unit, int track, int first, int sectors, void * buffer)
-{
-        if (DEBUG4 && debugflag4) console("diskwrite_real(): starting\n");
-
-        request_ptr req;
-        req->track = track;
-        req->start_sector = first;
-        req->num_sectors = sectors;
-        req->waiting_pid = getpid();
-        req->buffer = &buffer;
-        req->req_type = DISK_WRITE;
-        req->next_req = NULL;
-
-        //add request to Q
         if (DEBUG4 && debugflag4)
         {
-                console("diskwrite_real: adding to queue\n");
+          console("disk_size(): started\n");
         }
-        diskreq(req, unit);
-
-        //block calling process
-        if (DEBUG4 && debugflag4)
-        {
-                console("diskwrite_real: blocking calling process\n");
-        }
-        semp_real(Driver_Table[getpid() % MAXPROC].disk_sem);
-
-        return 0;
-}
-
-void diskwrite(sysargs * args)
-{
-        if (DEBUG4 && debugflag4) console("diskwrite(): starting\n");
-
-        int sectors = (int) args->arg2;
-        int track = (int) args->arg3;
-        int first = (int) args->arg4;
-        int unit = (int) args->arg5;
-        void * buffer = args->arg1;
-
-        //perform write
-        int status = diskwrite_real(unit, track, first, sectors, buffer);
-
-        //check for bad input
-        if (status == -1)
-        {
-                args->arg4 = (void *) -1;
-                return;
-        }
-
-        args->arg1 = (void *) status;
-        args->arg4 = (void *) 0;
-
-        return;
-}
-
-int disksize_real(int unit, int * sector, int * track, int * disk)
-{
-        if (DEBUG4 && debugflag4) console("disksize_real(): starting\n");
-
-        if (unit < 0 || unit > DISK_UNITS) return -1;
-
-        *sector = DISK_SECTOR_SIZE;
-        *track = DISK_TRACK_SIZE;
-        *disk = num_tracks[unit];
-
-        if (DEBUG4 && debugflag4)
-        {
-                console("disksize_real:\tsector: %d, num sectors: %d, num_tracks: %d\n", sector, track, disk);
-        }
-
-        return 0;
-}
-
-void disksize(sysargs * args)
-{
-        if (DEBUG4 && debugflag4) console("disksize(): starting\n");
-
-        int unit = (int) args->arg1;
-        int sector;
-        int track;
-        int disk;
-
-        //check for bad input
-        int status = disksize_real(unit, &sector, &track, &disk);
-
-        if (status == -1)
-        {
-                if (DEBUG4 && debugflag4)
-                {
-                        console("disksize: bad status\n");
-                }
-                args->arg4 = (void *) -1;
-                return;
-        }
-
-        //everything looks good so set args
-        if (DEBUG4 && debugflag4)
-        {
-                console("disksize:\tsector: %d, num sectors: %d, num_tracks: %d\n", sector, track, disk);
-        }
-
-        args->arg1 = (void *) sector;
-        args->arg2 = (void *) track;
-        args->arg3 = (void *) disk;
-        args->arg4 = (void *) 0;
-
-        return;
-}
-
-int termread_real(int unit, int size, char * buffer)
-{
-  if (DEBUG4 && debugflag4) console("termread_real(): starting\n");
-
-  char line[MAXLINE];
-
-  //check for line
-  int result = MboxReceive(line_read[unit], line, size);
-
-  memcpy(buffer, line, size);
-
-  //check result
-  if (result < 0) return -1;
-
-  return result;
-
-}
-void termread(sysargs * args)
-{
-        if (DEBUG4 && debugflag4) console("termread(): starting\n");
-
-        char * buffer = (char *) args->arg1;
-        int size = (int) args->arg2;
-        int unit = (int) args->arg3;
-
-        int status = termread_real(unit, size, buffer);
-
-        //check status
-        if (status == -1)
-        {
-                args->arg4 = (void *) -1;
-                return;
-        }
-
-        //set args
-        args->arg2 = (void *) status;
-        args->arg4 = (void *) 0;
-
-        return;
-}
-
-int termwrite_real(int unit, int size, char * buffer)
-{
-    if (DEBUG4 && debugflag4) console("termwrite_real(): starting\n");
-
-    //send pid
-    char pid[10];
-    sprintf(pid, "%d", getpid());
-    MboxSend(pid_box[unit], pid, sizeof(int));
-
-    //send text
-    int result = MboxSend(line_write[unit], buffer, size);
-
-    //check result
-    if (result < 0) return -1;
-
-    //block until done
-    semp_real(Driver_Table[getpid() % MAXPROC].term_sem);
-
-    return result;
-}
-
-void termwrite(sysargs * args)
-{
-        if (DEBUG4 && debugflag4) console("termwrite(): starting\n");
-
-        char * buffer = (char *) args->arg1;
-        int size = (int) args->arg2;
-        int unit = (int) args->arg3;
-
-        //check size
-        int status = termwrite_real(unit, size, buffer);
-
-        //check status
-        if (status == -1)
-        {
-          args->arg4 = (void *) -1;
-          return;
-        }
-
-        //set args
-        args->arg2 = (void *) status;
-        args->arg4 = (void *) 0;
-        return;
-}
-static int ClockDriver(char *arg)
-{
-        if (DEBUG4 && debugflag4) console("ClockDriver(): starting\n");
 
         int result;
-        int status;
 
-        /*
-         * Let the parent know we are running and enable interrupts.
-         */
-        semv_real(running);
-        psr_set(psr_get() | PSR_CURRENT_INT);
-        while(!is_zapped() && terminate_clock) {
-                result = waitdevice(CLOCK_DEV, 0, &status);
-                if (result != 0) return 0;
-                /*
-                 * Compute the current time and wake up any processes
-                 * whose time has come.
-                 */
-                while (sleepQ != NULL && sleepQ->wake_time < sys_clock())
-                {
-                        //wake sleeper
-                        semv_real(sleepQ->sleep_sem);
+        int sector_size;
+        int sectors_in_track;
+        int tracks_in_disk;
 
-                        //remove head of sleepQ and set new head for while loop
-                        driver_proc_ptr walker = sleepQ->next_sleep;
-                        sleepQ->next_sleep = NULL;
-                        sleepQ->wake_time = -1;
-                        sleepQ = walker;
-                }
+        int unit = (int) arg->arg1;
+
+        result = disksize_real(unit, &sector_size, &sectors_in_track, &tracks_in_disk);
+
+        if (result == -1)
+        {
+                arg->arg4 = (void *) -1;
+        }
+        else
+        {
+                arg->arg4 = (void *) 0;
         }
 
-        return 0;
+        arg->arg1 = (void *) sector_size;
+        arg->arg2 = (void *) sectors_in_track;
+        arg->arg3 = (void *) tracks_in_disk;
 }
 
-static int DiskDriver(char *arg)
+int diskwrite_real(int unit, int track_start, int sector_start, int sectors, void * buffer)
 {
+        if (DEBUG4 && debugflag4)
+        {
+          console("diskwrite_real(%d): started\n", unit);
+        }
 
-        int unit = atoi(arg);
-        device_request my_request;
+        driver_proc new_proc;
+
+        if (unit < 0 || unit > 1)
+        {
+                return -1;
+        }
+        if (track_start < 0 || track_start > num_tracks[unit] - 1)
+        {
+                return -1;
+        }
+        if (sector_start < 0 || sector_start > DISK_TRACK_SIZE - 1)
+        {
+                return -1;
+        }
+
+        add_process();
+
+        //build struct
+        new_proc.unit = unit;
+        new_proc.track_start = track_start;
+        new_proc.sector_start = sector_start;
+        new_proc.num_sectors = sectors;
+        new_proc.disk_buf = buffer;
+        new_proc.mbox_id = Proc_Table[getpid() % MAXPROC].mbox_id;
+        new_proc.operation = DISK_WRITE;
+        new_proc.next_ptr = NULL;
+
+        add_driver_process(&new_proc);
+
+        semv_real(disksems[unit]);
+
+        MboxReceive(Proc_Table[getpid() % MAXPROC].mbox_id, NULL, 0);
+
+        remove_process();
+
+        return new_proc.status;
+
+}
+
+void disk_write(sysargs * arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("disk_write(): started\n");
+        }
+
         int result;
-        int status;
-        int * tracks;
 
-        driver_proc_ptr current_req;
+        void * buffer = arg->arg1;
+        int sectors = (int) arg->arg2;
+        int track_start = (int) arg->arg3;
+        int sector_start = (int) arg->arg4;
+        int unit = (int) arg->arg5;
 
-        if (DEBUG4 && debugflag4)
-                console("DiskDriver(%d): started\n", unit);
+        result = diskwrite_real(unit, track_start, sector_start, sectors, buffer);
 
-        topQ[unit] = NULL;
-        bottomQ[unit] = NULL;
-        disk_sem[unit] = semcreate_real(0);
-        disk_req[unit] = semcreate_real(0);
-        disk_arm[unit] = 0;
-
-        /* Get the number of tracks for this disk */
-        my_request.opr  = DISK_TRACKS;
-        my_request.reg1 = &tracks;
-
-        result = device_output(DISK_DEV, unit, &my_request);
-
-        if (result != DEV_OK) {
-                console("DiskDriver %d: did not get DEV_OK on DISK_TRACKS call\n", unit);
-                console("DiskDriver %d: is the file disk%d present???\n", unit, unit);
-                halt(1);
-        }
-
-        waitdevice(DISK_DEV, unit, &status);
-
-        if (DEBUG4 && debugflag4)
+        if (result == -1)
         {
-                console("DiskDriver(%d): tracks = %d\n", unit, num_tracks[unit]);
+                arg->arg4 = (void *) -1;
         }
-
-        num_tracks[unit] = *tracks;
-
-        //let parent know and enable interrupts
-        semv_real(running);
-        enable_interrupts();
-
-        while (!is_zapped() && terminate_disk)
+        else
         {
-                semp_real(disk_sem[unit]);
-                if (!terminate_disk)
-                {
-                        if (DEBUG4 && debugflag4) console("DiskDriver: #%d breaking loop\n", unit);
-                        break;
-                }
-                request_ptr req = topQ[unit];
-                topQ[unit] = topQ[unit]->next_req;
-
-                disk_seek(unit, req->track);
-
-                for (int i = 0; i < req->num_sectors; i++)
-                {
-                        device_request single_req;
-                        single_req.opr = req->req_type;
-
-                        //sector may change, based on i
-                        single_req.reg1 = (void *) ((req->start_sector + i) % 16);
-
-                        //sector may change depedent on sector we are visiting
-                        single_req.reg2 = &(req->buffer) + (512 * i);
-
-                }
-
-                semv_real(Driver_Table[req->waiting_pid].disk_sem);
+                arg->arg4 = (void *) 0;
         }
-        //more code
-        return 0;
+
+        arg->arg1 = (void *) result;
+
+        return;
 }
 
-static int TermDriver(char * arg)
+int diskread_real(int unit, int track_start, int sector_start, int sectors, void * buffer)
 {
-        int unit = atoi(arg);
-        int status;
-
-        if (DEBUG4 && debugflag4) console("TermDriver: #%d starting\n", unit);
-
-        //let parent know
-        semv_real(running);
-
-        //turn on read in interrupts
-        int control = 0;
-        control = TERM_CTRL_RECV_INT(control);
-        int res = device_output(TERM_DEV, unit, (void *) control);
-        if (res != DEV_OK)
+        if (DEBUG4 && debugflag4)
         {
-                if (DEBUG4 && debugflag4)
-                {
-                        console("TermDriver: quit unexpectedly. res: %d\n", res);
-                }
-
-                halt(0);
+          console("diskread_real(%d): started\n", unit);
         }
 
-        //infite loop till zappd
+        driver_proc new_proc;
+        if (unit < 0 || unit > 1)
+        {
+                return -1;
+        }
+        if (track_start < 0 || track_start > num_tracks[unit] - 1)
+        {
+                return -1;
+        }
+        if (sector_start < 0 || sector_start > DISK_TRACK_SIZE - 1)
+        {
+                return -1;
+        }
+
+        add_process();
+
+        //build struct
+        new_proc.unit = unit;
+        new_proc.track_start = track_start;
+        new_proc.sector_start = sector_start;
+        new_proc.num_sectors = sectors;
+        new_proc.disk_buf = buffer;
+        new_proc.mbox_id = Proc_Table[getpid() % MAXPROC].mbox_id;
+        new_proc.operation = DISK_READ;
+        new_proc.next_ptr = NULL;
+
+        //add to our queue
+        add_driver_process(&new_proc);
+
+        //wake up driver
+        semv_real(disksems[unit]);
+
+        MboxReceive(Proc_Table[getpid() % MAXPROC].mbox_id, NULL, 0);
+
+        remove_process();
+
+        return new_proc.status;
+
+}
+
+void disk_read(sysargs * arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("disk_read(): started\n");
+        }
+
+        int result;
+
+        void * buffer = arg->arg1;
+        int sectors = (int) arg->arg2;
+        int track_start = (int) arg->arg3;
+        int sector_start = (int) arg->arg4;
+        int unit = (int) arg->arg5;
+
+        result = diskread_real(unit, track_start, sector_start, sectors, buffer);
+
+        if (result == -1)
+        {
+                arg->arg4 = (void *) -1;
+        }
+        else arg->arg4 = (void *) 0;
+
+        arg->arg1 = (void *) result;
+
+        return;
+}
+
+static int TermDriver(char *arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("TermDriver(): started\n");
+        }
+
+        int status;
+        int result;
+        int unit = atoi(arg);
+        int control = 2;
+
+        //turn on recv interrupts
+        device_output(TERM_DEV, unit, &control);
+
         while (!is_zapped())
         {
-                //wait for it to run
-                int result = waitdevice(TERM_INT, 0, &status);
-                if (result != 0)
-                {
-                        quit(0);
-                }
+                result = waitdevice(TERM_DEV, unit, &status);
+                if (is_zapped()) return 0;
+                if (result != 0) return 0;
 
-                //check for receive char
+                char c = TERM_STAT_CHAR(status);
+                //if busy then give to term_read
                 if (TERM_STAT_RECV(status) == DEV_BUSY)
                 {
-                        char c = TERM_STAT_CHAR(status);
-                        //send msg saying char needs to be received
-                        MboxSend(char_receive[unit], &c, sizeof(int));
+                        MboxCondSend(char_receive[unit], &c, sizeof(char));
                 }
-
-                //check for send char
+                //otherwise give to term_writer
                 if (TERM_STAT_XMIT(status) == DEV_READY)
                 {
-                        char c = TERM_STAT_CHAR(status);
-                        //send msg saying char needs to be sent
-                        MboxSend(char_send[unit], &c, sizeof(int));
+                        MboxCondSend(char_send[unit], NULL, 0);
                 }
-        }
-
-        return 0;
-}
-
-static int TermReader(char * arg)
-{
-        int unit = atoi(arg);
-        int pos = 0;
-        char line[MAXLINE];
-
-
-        //let parent know
-        semv_real(running);
-
-        //infinite loop till zapped
-        while(!is_zapped())
-        {
-                char receive[1]; //to hold received char
-
-                //wait till there is something to read in
-                MboxReceive(char_receive[unit], receive, sizeof(int));
-
-                if (!terminate_term)
-                {
-                        if (DEBUG4 && debugflag4)
-                        {
-                                console("TermReader: terminate_term is %d, unit is %d\n", terminate_term, unit);
-                        }
-                        break;
-                }
-
-                //place character in line for sending later
-                line[pos++] = (char) receive[0];
-
-                //see if we can send line
-                if ((char) receive[0] == '\n' || pos == MAXLINE)
-                {
-                        //send to the mailbox for reading
-                        MboxCondSend(line_read[unit], line, sizeof(line));
-
-                        for (int i = 0; i < MAXLINE; i++)
-                        {
-                                line[i] = '\0';
-                        }
-
-                        //then reset position
-                        pos = 0;
-                }
-
-        }
-
-        return 0;
-}
-
-static int TermWriter(char * arg)
-{
-        int unit = atoi(arg);
-
-        //let parent know
-        semv_real(running);
-
-        //infinite loop till zapped
-        while (!is_zapped())
-        {
-                char receive[MAXLINE];
-
-                int count = 0;
-                count = TERM_CTRL_XMIT_INT(count);
-                count = TERM_CTRL_RECV_INT(count);
-                device_output(TERM_DEV, unit, (void *) count);
-
-                //wait until termwriter_reak sends line
-                MboxReceive(line_write[unit], receive, MAXLINE);
-
-                if (terminate_term)
-                {
-                        if (DEBUG4 && debugflag4)
-                        {
-                                console("TermWriter: terminate_term is %d, unit is %d\n", terminate_term, unit);
-                        }
-
-                        break;
-                }
-
-                //iterate through the line
-                for (int i = 0; i < strlen(receive); i++)
-                {
-                        char * c;
-                        //get char from term driver
-                        MboxReceive(char_receive[unit], c, sizeof(int));
-
-                        //transmit it
-                        int control = 0;
-                        control = TERM_CTRL_CHAR(control, c[0]);
-                        control = TERM_CTRL_XMIT_INT(control);
-                        control = TERM_CTRL_XMIT_CHAR(control);
-
-                        //check if reutnred properly
-                        int res = device_output(TERM_DEV, unit, (void *) control);
-
-                        if (res != DEV_OK)
-                        {
-                                if (DEBUG4 && debugflag4)
-                                {
-                                        console("TermWriter: quit unexpectedly. res: %d\n", res);
-                                }
-
-                                halt(0);
-                        }
-                }
-
-                //wait till termwriter_real send its pid
-                char pid_c[10];
-                MboxReceive(pid_box[unit], pid_c, sizeof(int));
-                int pid = atoi((char *) pid_c);
-
-                //wake up waiting process
-                semv_real(Driver_Table[pid % MAXPROC].term_sem);
         }
 
         return 0;
@@ -747,50 +667,41 @@ static int TermWriter(char * arg)
 
 int start3(char *arg)
 {
-        if (DEBUG4 && debugflag4) console("start3(): starting\n");
-
-
         char name[128];
-        char termbuf[10];
+        char buf[10];
         int i;
         int clockPID;
+        int diskPID[DISK_UNITS];
+        int termdriverPID[TERM_UNITS];
+        int termreaderPID[TERM_UNITS];
+        int termwriterPID[TERM_UNITS];
         int pid;
         int status;
-        terminate_disk = 1;
-        terminate_clock = 1;
-        terminate_term = 1;
 
-        /*
-         * Check kernel mode here.
-         */
+        //Check kernel mode here.
         check_kernel_mode("start3");
 
         /* Assignment system call handlers */
         sys_vec[SYS_SLEEP]     = sleep;
-        sys_vec[SYS_DISKREAD]  = diskread;
-        sys_vec[SYS_DISKWRITE] = diskwrite;
-        sys_vec[SYS_DISKSIZE]  = disksize;
-        sys_vec[SYS_TERMREAD]  = termread;
-        sys_vec[SYS_TERMWRITE] = termwrite;
+        sys_vec[SYS_DISKREAD]  = disk_read;
+        sys_vec[SYS_DISKWRITE] = disk_write;
+        sys_vec[SYS_DISKSIZE] = disk_size;
+        sys_vec[SYS_TERMREAD]  = term_read;
+        sys_vec[SYS_TERMWRITE] = term_write;
 
 
         /* Initialize the phase 4 process table */
         for (int i = 0; i < MAXPROC; i++)
         {
-                Driver_Table[i].wake_time = -1;
-                Driver_Table[i].sleep_sem = semcreate_real(0);
-                Driver_Table[i].term_sem = semcreate_real(0);
-                Driver_Table[i].disk_sem = semcreate_real(0);
-                Driver_Table[i].next_sleep = NULL;
+                Proc_Table[i].status = EMPTY;
+                Proc_Table[i].pid    = -1;
         }
 
-        for (int i = 0; i < TERM_UNITS; i++)
+        /* Initialize sleepQ */
+        sleepQ = NULL;
+        for (int i = 0; i < DISK_UNITS; i++)
         {
-                char_receive[i] = MboxCreate(1, 1);
-                char_send[i] = MboxCreate(1, 1);
-                line_read[i] = MboxCreate(10, MAXLINE);
-                line_write[i] = MboxCreate(10, MAXLINE);
-                pid_box[i] = MboxCreate(10, MAXLINE);
+                diskQ[i] = NULL;
         }
 
         /*
@@ -800,21 +711,21 @@ int start3(char *arg)
          */
         running = semcreate_real(0);
         clockPID = fork1("Clock driver", ClockDriver, NULL, USLOSS_MIN_STACK, 2);
-
-        if (clockPID < 0)
-        {
+        if (clockPID < 0) {
                 console("start3(): Can't create clock driver\n");
                 halt(1);
         }
 
-        strcpy(Driver_Table[clockPID % MAXPROC].name, "Clock driver");
-        Driver_Table[clockPID % MAXPROC].pid = clockPID;
-        Driver_Table[clockPID % MAXPROC].status = ACTIVE;
+        //add to process table
+        strcpy(Proc_Table[clockPID % MAXPROC].name, "Clock driver");
+        Proc_Table[clockPID % MAXPROC].pid = clockPID;
+        Proc_Table[clockPID % MAXPROC].status = ACTIVE;
 
         /*
          * Wait for the clock driver to start. The idea is that ClockDriver
          * will V the semaphore "running" once it is running.
          */
+
         semp_real(running);
 
         /*
@@ -823,54 +734,89 @@ int start3(char *arg)
          * driver, and perhaps do something with the pid returned.
          */
 
-        if (DEBUG4 && debugflag4) console("start3(): creating disk drivers\n");
-
-        for (int i = 0; i < DISK_UNITS; i++)
-        {
-                sprintf(termbuf, "%d", i);
+        for (i = 0; i < DISK_UNITS; i++) {
+                sprintf(buf, "%d", i);
                 sprintf(name, "DiskDriver%d", i);
-                diskpids[i] = fork1(name, DiskDriver, termbuf, USLOSS_MIN_STACK, 2);
-                if (diskpids[i] < 0)
-                {
+                disksems[i] = semcreate_real(0);
+                pid = fork1(name, DiskDriver, buf, USLOSS_MIN_STACK, 2);
+                if (pid < 0) {
                         console("start3(): Can't create disk driver %d\n", i);
                         halt(1);
                 }
+
+                diskPID[i] = pid;
+
+                int sector, track;
+                disksize_real(i, &sector, &track, &num_tracks[i]);
+
+                strcpy(Proc_Table[pid & MAXPROC].name, name);
+                Proc_Table[pid & MAXPROC].pid = pid;
+                Proc_Table[pid & MAXPROC].status = ACTIVE;
         }
 
-        //Create the terminal device drivers here.
-        for (int i = 0; i < TERM_UNITS; i++)
+        //Create the terminal device drivers here
+        for (i = 0; i < TERM_UNITS; i++)
         {
-                sprintf(termbuf, "%d", i);
+                sprintf(buf, "%d", i);
+                sprintf(name, "TermDriver%d", i);
 
-                //term driver
-                termpids[i][0] = fork1(name, TermDriver, termbuf, USLOSS_MIN_STACK, 2);
-                if (termpids[i][0] < 0)
+                pid = fork1(name, TermDriver, buf, USLOSS_MIN_STACK, 2);
+                if (pid < 0)
                 {
-                        console("start3(): Can't create term driver %d\n", i);
+                        console("Can't create term driver. Halting..\n");
                         halt(1);
                 }
 
-                //term reader
-                termpids[i][1] = fork1(name, TermReader, termbuf, USLOSS_MIN_STACK, 2);
-                if (termpids[i][0] < 0)
+                termdriverPID[i] = pid; //store this for zapping
+
+                strcpy(Proc_Table[pid & MAXPROC].name, name);
+                Proc_Table[pid & MAXPROC].pid = pid;
+                Proc_Table[pid & MAXPROC].status = ACTIVE;
+
+                //TermReader process
+                sprintf(buf, "%d", i);
+                sprintf(name, "TermReader%d", i);
+
+                pid = fork1(name, TermReader, buf, USLOSS_MIN_STACK, 2);
+                if (pid < 0)
                 {
-                        console("start3(): Can't create term driver %d\n", i);
+                        console("Can't create term reader. Halting..\n");
                         halt(1);
                 }
 
-                //term writer
-                termpids[i][2] = fork1(name, TermWriter, termbuf, USLOSS_MIN_STACK, 2);
-                if (termpids[i][1] < 0)
+                termreaderPID[i] = pid;
+
+                strcpy(Proc_Table[pid & MAXPROC].name, name);
+                Proc_Table[pid & MAXPROC].pid = pid;
+                Proc_Table[pid & MAXPROC].status = ACTIVE;
+
+                //TermWriter process
+                sprintf(buf, "%d", i);
+                sprintf(name, "TermWriter%d", i);
+
+                pid = fork1(name, TermWriter, buf, USLOSS_MIN_STACK, 2);
+                if (pid < 0)
                 {
-                        console("start3(): Can't create term reader %d\n", i);
+                        console("Can't create term writer. Halting..\n");
                         halt(1);
                 }
 
-                //wait for all to start
-                semp_real(running);
-                semp_real(running);
-                semp_real(running);
+                termwriterPID[i] = pid;
+
+                strcpy(Proc_Table[pid & MAXPROC].name, name);
+                Proc_Table[pid & MAXPROC].pid = pid;
+                Proc_Table[pid & MAXPROC].status = ACTIVE;
+
+                // ----
+
+                char_receive[i] = MboxCreate(1, sizeof(char));
+                char_send[i] = MboxCreate(0, 0);
+                line_receive[i] = MboxCreate(10, MAXLINE + 1);
+                line_send[i] = MboxCreate(0, MAXLINE);
+                user_write_boxes[i] = MboxCreate(0, sizeof(int));
         }
+
+
 
         /*
          * Create first user-level process and wait for it to finish.
@@ -886,43 +832,277 @@ int start3(char *arg)
          * Zap the device drivers
          */
 
-        //zap clock
+
         zap(clockPID); // clock driver
-        join(&status); /* for the Clock Driver */
-        if (DEBUG4 && debugflag4) console("start3(): clock closed\n");
 
-        //zap disk
-        for (int i = 0; i < DISK_UNITS; i++)
+        for (i = 0; i < DISK_UNITS; i++)
         {
-                semv_real(disk_sem[i]);
-                zap(diskpids[i]);
-                join(&status);
-                if (DEBUG4 && debugflag4) console("start3(): disk #%d closed\n", i);
+                //unblock the device drivers
+
+                semv_real(disksems[i]);
+
+                zap(diskPID[i]);
+
         }
 
-        //zap term readers
-        terminate_term = 0;
-        for (int i = 0; i < TERM_UNITS; i++)
+
+        char termfile[20];
+        FILE * kill;
+        for (i = 0; i < TERM_UNITS; i++)
         {
-                MboxSend(char_receive[i], (char *) 'c', sizeof(int));
-                join(&status);
-                if (DEBUG4 && debugflag4) console("start3(): term reader #%d\n", i);
+                MboxCondSend(char_receive[i], NULL, 0);
+                zap(termreaderPID[i]);
+
+                MboxCondSend(line_send[i], "end", 3);
+                zap(termwriterPID[i]);
         }
 
-        //zap term writers
-        for (int i = 0; TERM_UNITS; i++)
+        for (i = 0; i < TERM_UNITS; i++)
         {
-                MboxSend(line_write[i], (char *) 'c', sizeof(int));
-                join(&status);
-                if (DEBUG4 && debugflag4) console("start3(): term writer #%d\n", i);
+                sprintf(termfile, "./term%d.in", i);
+                kill = fopen(termfile, "a");
+                fprintf(kill, "Please stop driver.\n");
+                fclose(kill);
+
+                zap(termdriverPID[i]);
         }
 
-        //zap term drivers
-        for (int i = 0; i < TERM_UNITS; i++)
+        quit(0);
+        return 0;
+}
+
+static int ClockDriver(char *arg)
+{
+        if (DEBUG4 && debugflag4)
         {
-                zap(termpids[i][0]);
-                join(&status);
-                if (DEBUG4 && debugflag4) console("start3(): term driver #%d\n", i);
+          console("ClockDriver(): started\n");
+        }
+
+        int result;
+        int status;
+
+        /*
+         * Let the parent know we are running and enable interrupts.
+         */
+        semv_real(running);
+        enableInterrupts();
+
+        //infinite loop till zappd
+        while(!is_zapped()) {
+                result = waitdevice(CLOCK_DEV, 0, &status);
+                if (result != 0) {
+                        return 0;
+                }
+                /*
+                 * Compute the current time and wake up any processes
+                 * whose time has come.
+                 */
+                 while (sleepQ != NULL && sleepQ->wake_time <= sys_clock())
+                 {
+                   int mbox_id = sleepQ->mbox_id;
+                   sleepQ = sleepQ->sleep_ptr;
+                   MboxSend(mbox_id, NULL, 0);
+                 }
+        }
+
+        return 0;
+}
+
+//helper function for device_output
+int dev_output(device_request * req, int unit)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("dev_output(%d): started\n", unit);
+        }
+
+        int status;
+        int result;
+
+        device_output(DISK_DEV, unit, req);
+
+        result = waitdevice(DISK_DEV, unit, &status);
+
+        if (status == DEV_ERROR)
+        {
+                diskQ[unit]->status = status;
+                return -1;
+        }
+        if (result != 0) return -2;
+
+        diskQ[unit]->status = status;
+
+        return 0;
+}
+
+int diskwrite_handler(int unit)
+{
+  if (DEBUG4 && debugflag4)
+  {
+    console("diskwrite_handler(%d): started\n", unit);
+  }
+
+  int status = 0;
+  int current_track = diskQ[unit]->track_start;
+  int current_sector = diskQ[unit]->sector_start;
+
+  device_request req;
+  req.opr = DISK_SEEK;
+  req.reg1 = (void *) current_track;
+
+  //seek to initial track & write
+  if (dev_output(&req, unit) < 0)
+  {
+    return -1;
+  }
+
+  for (int i = 0; i < diskQ[unit]->num_sectors; i++)
+  {
+    //if all sectors are used
+    if (current_sector == DISK_TRACK_SIZE)
+    {
+      current_sector = 0;
+      current_track++;
+
+      //if all tracks on disk are used
+      if (current_track == num_tracks[unit])
+      {
+        return -1;
+      }
+
+      req.opr = DISK_SEEK;
+      req.reg1 = (void *) current_track;
+
+      //seek to next track
+      if (dev_output(&req, unit) < 0)
+      {
+        console("diskwrite_handler: failed to write\n");
+        return -1;
+      }
+    }
+
+    req.opr = DISK_WRITE;
+    req.reg1 = (void *) current_sector;
+    req.reg2 = diskQ[unit]->disk_buf + (512 * i);
+
+    //write sector to disk
+    if (dev_output(&req, unit) < 0)
+    {
+      diskQ[unit] = diskQ[unit]->next_ptr;
+      diskQ[unit]->status = status;
+      console("diskwrite_handler: failed to write\n");
+      return -1;
+    }
+
+    current_sector++;
+  }
+
+  //remove req and wake up calling process
+  int mbox_id = diskQ[unit]->mbox_id;
+  diskQ[unit] = diskQ[unit]->next_ptr;
+  MboxSend(mbox_id, NULL, 0);
+
+  return 0;
+}
+
+int diskread_handler(int unit)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("diskread_handler(%d): started\n", unit);
+        }
+
+        char buf[512];
+        int index = 0;
+        int current_track = diskQ[unit]->track_start;
+        int current_sector = diskQ[unit]->sector_start;
+
+        device_request req;
+        req.opr = DISK_SEEK;
+        req.reg1 = (void *) current_track;
+
+        //initial seek operation
+        if (dev_output(&req, unit) < 0)
+        {
+                return -1;
+        }
+
+        //all the read operations. may need to change track
+        for (int i = 0; i < diskQ[unit]->num_sectors; i++)
+        {
+                if (current_sector == DISK_TRACK_SIZE)
+                {
+                        current_sector = 0;
+                        current_track++;
+
+                        if (current_track == num_tracks[unit]) return -1;
+
+                        req.opr = DISK_SEEK;
+                        req.reg1 = (void *) current_track;
+
+                        if (dev_output(&req, unit) < 0) return -1;
+
+                }
+
+                //make device_request for reading
+                req.opr = DISK_READ;
+                req.reg1 = (void *) current_sector;
+                req.reg2 = buf;
+
+                //do read
+                if (dev_output(&req, unit) < 0)
+                {
+                        diskQ[unit] = diskQ[unit]->next_ptr;
+                        return -1;
+                }
+
+                //copy what was read into buff
+                memcpy( ((char *) diskQ[unit]->disk_buf + index), buf, 512);
+                index += 512;
+                current_sector++;
+        }
+
+        //wake up calling process and remove from queue
+        MboxSend(diskQ[unit]->mbox_id, NULL, 0);
+        diskQ[unit] = diskQ[unit]->next_ptr;
+
+        return 0;
+}
+
+static int DiskDriver(char *arg)
+{
+        if (DEBUG4 && debugflag4)
+        {
+          console("DiskDriver(): started\n");
+        }
+
+        int unit = atoi(arg);
+        int result;
+
+        while (!is_zapped())
+        {
+                if (diskQ[unit] != NULL)
+                {
+                        switch(diskQ[unit]->operation)
+                        {
+                        case DISK_READ:
+                                result = diskread_handler(unit);
+                                break;
+                        case DISK_WRITE:
+                                result = diskwrite_handler(unit);
+                                break;
+                        default:
+                                console("DiskDriver(%d): Invalid disk request\n", unit);
+                        }
+                }
+                else
+                {
+                        //otherwise block and wait for another disk request
+                        semp_real(disksems[unit]);
+                }
+
+                if (result < 0) console("DiskDriver(%d): read/write fail\n", unit);
+
         }
 
         return 0;
