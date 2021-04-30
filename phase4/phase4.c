@@ -59,10 +59,6 @@ void disk_write(sysargs *);
 int diskwrite_real(int, int, int, int, void *);
 void disk_size(sysargs *);
 int disksize_real(int, int *, int *, int *);
-void term_read(sysargs *);
-int termread_real(int, int, char *);
-void term_write(sysargs *);
-int termwrite_real(int, int, char *);
 void insert_process();
 void remove_process();
 int diskread_handler(int);
@@ -71,7 +67,6 @@ int dev_output(device_request *, int);
 void insert_diskreq(driver_proc_ptr);
 static int  ClockDriver(char *);
 static int  DiskDriver(char *);
-static int TermDriver(char *);
 
 extern int start4(char *);
 /* -------------------------- Functions ----------------------------------- */
@@ -123,72 +118,6 @@ void remove_process()
         Proc_Table[getpid() % MAXPROC].sleep_ptr = NULL;
 
         return;
-}
-
-int TermReader(char * arg)
-{
-        int unit = atoi(arg);
-        char line[MAXLINE + 1];
-        int index = 0;
-        char buffer;
-
-        while (1) {
-                // get char from driver
-                MboxReceive(char_receive[unit], &buffer, sizeof(char));
-
-                if (is_zapped()) return 0;
-
-                // apend char to line
-                line[index] = buffer;
-                index++;
-
-                // send line to mailbox when line is complete
-                if (buffer == '\n' || index >= MAXLINE) {
-                        line[index] = 0;
-                        MboxCondSend(line_receive[unit], (void *) line, MAXLINE + 1);
-                        index = 0;
-                }
-        }
-}
-
-int TermWriter(char * arg)
-{
-        int unit = atoi(arg);
-        int chars;
-        char line[MAXLINE];
-        int control = 0;
-
-        /* Run while not zapped
-           block on mBoxRecieve and wait for termWriteReal to send the line
-           check to see if you are zapped, if so then return.
-           Get line and set a control int to XMIT and do a device output to enable writing.
-         */
-        while (!is_zapped()) {
-                chars = MboxReceive(line_send[unit], line, MAXLINE);
-                if (chars > MAXLINE) {
-                        chars = 80;
-                }
-                if (is_zapped()) {
-                        return 0;
-                }
-                for (int i = 0; i < chars; i++) {
-                        control = 0;
-                        control = TERM_CTRL_CHAR(control, line[i]);
-                        control = TERM_CTRL_XMIT_INT(control);
-                        control = TERM_CTRL_RECV_INT(control);
-                        control = TERM_CTRL_XMIT_CHAR(control);
-
-                        device_output(TERM_DEV, unit,((void *)(long) control));
-
-                        MboxReceive(char_send[unit], NULL, 0);
-                }
-                control = 2;
-                device_output(TERM_DEV, unit, &control);
-                //Send number of chars written to user
-                MboxSend(user_write_boxes[unit], &chars, sizeof(int));
-        }
-
-        return 0;
 }
 
 int sleep_real(int seconds)
@@ -313,118 +242,7 @@ void add_driver_process(driver_proc_ptr some_proc)
         }
 }
 
-int termwrite_real(int unit, int buf_size, char * buf)
-{
-        if (DEBUG4 && debugflag4)
-        {
-          console("termwrite_real(%d): started\n", unit);
-        }
 
-        int chars;
-        if (unit < 0 || unit > 3)
-        {
-                return -1;
-        }
-        if (buf_size < 0)
-        {
-                return -1;
-        }
-
-        MboxSend(line_send[unit], buf, buf_size);
-
-        MboxReceive(user_write_boxes[unit], &chars, sizeof(int));
-
-        return chars;
-}
-
-void term_write(sysargs * arg)
-{
-        if (DEBUG4 && debugflag4)
-        {
-          console("term_write(): started\n");
-        }
-
-        int result;
-        int unit = (int) arg->arg3;
-        int buf_size = (int) arg->arg2;
-        char * buf = (char *) arg->arg1;
-
-        result = termwrite_real(unit, buf_size, buf);
-
-        arg->arg2 = (void *) result;
-
-        if (result == -1)
-        {
-                arg->arg4 = (void *) -1;
-        }
-        else
-        {
-                arg->arg4 = (void *) 0;
-        }
-
-        return;
-}
-
-int termread_real(int unit, int buf_size, char * buf)
-{
-        if (DEBUG4 && debugflag4)
-        {
-          console("termread_real(%d): started\n", unit);
-        }
-
-        if (unit < 0 || unit > 3)
-        {
-                return -1;
-        }
-        if (buf_size < 0)
-        {
-                return -1;
-        }
-
-        char buffer[MAXLINE + 1];
-        MboxReceive(line_receive[unit], buf, MAXLINE + 1);
-        int buf_length = strlen(buffer);
-        buffer[buf_length] = '\n';
-
-        if (buf_size < buf_length)
-        {
-                memcpy(buf, buffer, buf_size + 1);
-                return buf_length;
-        }
-        else
-        {
-                memcpy(buf, buffer, buf_length);
-                return buf_length;
-        }
-
-        return -1;
-}
-
-void term_read(sysargs * arg)
-{
-        if (DEBUG4 && debugflag4)
-        {
-          console("term_read(): started\n");
-        }
-
-        int result;
-        int unit = (int) arg->arg3;
-        int buf_size = (int) arg->arg2;
-        char * buf = (char *) arg->arg1;
-
-        result = termread_real(unit, buf_size, buf);
-
-        arg->arg2 = (void *) result;
-
-        if (result == -1)
-        {
-                arg->arg4 = (void *) -1;
-        }
-        else
-        {
-                arg->arg4 = (void *) 0;
-        }
-}
 
 int disksize_real(int unit, int * sector_size, int * sectors_in_track, int * tracks_in_disk)
 {
@@ -650,54 +468,13 @@ void disk_read(sysargs * arg)
         return;
 }
 
-static int TermDriver(char *arg)
-{
-        if (DEBUG4 && debugflag4)
-        {
-          console("TermDriver(): started\n");
-        }
-
-        int status;
-        int result;
-        int unit = atoi(arg);
-        int control = 2;
-
-        //turn on recv interrupts
-        device_output(TERM_DEV, unit, &control);
-
-        while (!is_zapped())
-        {
-                result = waitdevice(TERM_DEV, unit, &status);
-                if (is_zapped()) return 0;
-                if (result != 0) return 0;
-
-                char c = TERM_STAT_CHAR(status);
-                //if busy then give to term_read
-                if (TERM_STAT_RECV(status) == DEV_BUSY)
-                {
-                        MboxCondSend(char_receive[unit], &c, sizeof(char));
-                }
-                //otherwise give to term_writer
-                if (TERM_STAT_XMIT(status) == DEV_READY)
-                {
-                        MboxCondSend(char_send[unit], NULL, 0);
-                }
-        }
-
-        return 0;
-}
-
 int start3(char *arg)
 {
         char name[128];
         char diskbuf[10];
-        char termbuf[10];
         int i;
         int clockPID;
 
-        int termdriverPID[TERM_UNITS];
-        int termreaderPID[TERM_UNITS];
-        int termwriterPID[TERM_UNITS];
         int pid;
         int status;
 
@@ -709,8 +486,6 @@ int start3(char *arg)
         sys_vec[SYS_DISKREAD]  = disk_read;
         sys_vec[SYS_DISKWRITE] = disk_write;
         sys_vec[SYS_DISKSIZE] = disk_size;
-        sys_vec[SYS_TERMREAD]  = term_read;
-        sys_vec[SYS_TERMWRITE] = term_write;
 
 
         /* Initialize the phase 4 process table */
@@ -777,69 +552,6 @@ int start3(char *arg)
                 Proc_Table[pid & MAXPROC].status = ACTIVE;
         }
 
-        //Create the terminal device drivers here
-        for (i = 0; i < TERM_UNITS; i++)
-        {
-                sprintf(termbuf, "%d", i);
-                sprintf(name, "TermDriver%d", i);
-
-                pid = fork1(name, TermDriver, termbuf, USLOSS_MIN_STACK, 2);
-                if (pid < 0)
-                {
-                        console("Can't create term driver. Halting..\n");
-                        halt(1);
-                }
-
-                termdriverPID[i] = pid; //store this for zapping
-
-                strcpy(Proc_Table[pid & MAXPROC].name, name);
-                Proc_Table[pid & MAXPROC].pid = pid;
-                Proc_Table[pid & MAXPROC].status = ACTIVE;
-
-                //TermReader process
-                sprintf(termbuf, "%d", i);
-                sprintf(name, "TermReader%d", i);
-
-                pid = fork1(name, TermReader, termbuf, USLOSS_MIN_STACK, 2);
-                if (pid < 0)
-                {
-                        console("Can't create term reader. Halting..\n");
-                        halt(1);
-                }
-
-                termreaderPID[i] = pid;
-
-                strcpy(Proc_Table[pid & MAXPROC].name, name);
-                Proc_Table[pid & MAXPROC].pid = pid;
-                Proc_Table[pid & MAXPROC].status = ACTIVE;
-
-                //TermWriter process
-                sprintf(termbuf, "%d", i);
-                sprintf(name, "TermWriter%d", i);
-
-                pid = fork1(name, TermWriter, termbuf, USLOSS_MIN_STACK, 2);
-                if (pid < 0)
-                {
-                        console("Can't create term writer. Halting..\n");
-                        halt(1);
-                }
-
-                termwriterPID[i] = pid;
-
-                strcpy(Proc_Table[pid & MAXPROC].name, name);
-                Proc_Table[pid & MAXPROC].pid = pid;
-                Proc_Table[pid & MAXPROC].status = ACTIVE;
-
-                // ----
-
-                char_receive[i] = MboxCreate(1, sizeof(char));
-                char_send[i] = MboxCreate(0, 0);
-                line_receive[i] = MboxCreate(10, MAXLINE + 1);
-                line_send[i] = MboxCreate(0, MAXLINE);
-                user_write_boxes[i] = MboxCreate(0, sizeof(int));
-        }
-
-
 
         /*
          * Create first user-level process and wait for it to finish.
@@ -857,6 +569,7 @@ int start3(char *arg)
 
 
         zap(clockPID); // clock driver
+        join(&status);
 
         for (i = 0; i < DISK_UNITS; i++)
         {
@@ -865,29 +578,8 @@ int start3(char *arg)
                 semv_real(disksems[i]);
 
                 zap(diskpids[i]);
+                join(&status);
 
-        }
-
-
-        char termfile[20];
-        FILE * kill;
-        for (i = 0; i < TERM_UNITS; i++)
-        {
-                MboxCondSend(char_receive[i], NULL, 0);
-                zap(termreaderPID[i]);
-
-                MboxCondSend(line_send[i], "end", 3);
-                zap(termwriterPID[i]);
-        }
-
-        for (i = 0; i < TERM_UNITS; i++)
-        {
-                sprintf(termfile, "./term%d.in", i);
-                kill = fopen(termfile, "a");
-                fprintf(kill, "Please stop driver.\n");
-                fclose(kill);
-
-                zap(termdriverPID[i]);
         }
 
         quit(0);
