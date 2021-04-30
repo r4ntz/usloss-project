@@ -25,26 +25,25 @@
 #include "driver.h"
 
 /* -------------------------- Globals ------------------------------------- */
-int debugflag4 = 0;
+int debugflag4 = 1;
 
 static int running; /*semaphore to synchronize drivers and start3*/
 
 proc_struct Proc_Table[MAXPROC];
 int disksems[DISK_UNITS];
+int diskpids[DISK_UNITS];
+int num_tracks[DISK_UNITS];
+driver_proc_ptr diskQ[DISK_UNITS];
 
 int char_receive[TERM_UNITS];
 int char_send[TERM_UNITS];
-
 int line_receive[TERM_UNITS];
 int line_send[TERM_UNITS];
-
 int user_write_boxes[TERM_UNITS];
 
-int num_tracks[DISK_UNITS];
 
 proc_ptr sleepQ;
 
-driver_proc_ptr diskQ[DISK_UNITS];
 
 /* ------------------------- Prototypes ----------------------------------- */
 void check_kernel_mode(char *);
@@ -271,10 +270,20 @@ void add_driver_process(driver_proc_ptr some_proc)
 
         if (diskQ[unit] == NULL)
         {
+                if (DEBUG4 && debugflag4)
+                {
+                  console("add_driver_process(%d): inserting at head of diskQ (only member)\n",
+                  some_proc->unit);
+                }
                 diskQ[unit] = some_proc;
         }
         else
         {
+                if (DEBUG4 && debugflag4)
+                {
+                  console("add_driver_process(%d): locating suitable slot inside diskQ\n",
+                  some_proc->unit);
+                }
                 driver_proc_ptr prev = diskQ[unit];
                 driver_proc_ptr walker = diskQ[unit]->next_ptr;
                 if (some_proc->track_start > diskQ[unit]->track_start)
@@ -287,6 +296,19 @@ void add_driver_process(driver_proc_ptr some_proc)
                         }
                         prev->next_ptr = some_proc;
                         some_proc->next_ptr = walker;
+                }
+                else
+                {
+                  while (walker != NULL && prev->track_start <= walker->track_start)
+                  {
+                    prev = prev->next_ptr;
+                    walker = walker->next_ptr;
+                  }
+                  while (walker != NULL && walker->track_start <= some_proc->track_start)
+                  {
+                    prev = prev->next_ptr;
+                    walker = walker->next_ptr;
+                  }
                 }
         }
 }
@@ -668,10 +690,11 @@ static int TermDriver(char *arg)
 int start3(char *arg)
 {
         char name[128];
-        char buf[10];
+        char diskbuf[10];
+        char termbuf[10];
         int i;
         int clockPID;
-        int diskPID[DISK_UNITS];
+
         int termdriverPID[TERM_UNITS];
         int termreaderPID[TERM_UNITS];
         int termwriterPID[TERM_UNITS];
@@ -735,16 +758,16 @@ int start3(char *arg)
          */
 
         for (i = 0; i < DISK_UNITS; i++) {
-                sprintf(buf, "%d", i);
+                sprintf(diskbuf, "%d", i);
                 sprintf(name, "DiskDriver%d", i);
                 disksems[i] = semcreate_real(0);
-                pid = fork1(name, DiskDriver, buf, USLOSS_MIN_STACK, 2);
+                pid = fork1(name, DiskDriver, diskbuf, USLOSS_MIN_STACK, 2);
                 if (pid < 0) {
                         console("start3(): Can't create disk driver %d\n", i);
                         halt(1);
                 }
 
-                diskPID[i] = pid;
+                diskpids[i] = pid;
 
                 int sector, track;
                 disksize_real(i, &sector, &track, &num_tracks[i]);
@@ -757,10 +780,10 @@ int start3(char *arg)
         //Create the terminal device drivers here
         for (i = 0; i < TERM_UNITS; i++)
         {
-                sprintf(buf, "%d", i);
+                sprintf(termbuf, "%d", i);
                 sprintf(name, "TermDriver%d", i);
 
-                pid = fork1(name, TermDriver, buf, USLOSS_MIN_STACK, 2);
+                pid = fork1(name, TermDriver, termbuf, USLOSS_MIN_STACK, 2);
                 if (pid < 0)
                 {
                         console("Can't create term driver. Halting..\n");
@@ -774,10 +797,10 @@ int start3(char *arg)
                 Proc_Table[pid & MAXPROC].status = ACTIVE;
 
                 //TermReader process
-                sprintf(buf, "%d", i);
+                sprintf(termbuf, "%d", i);
                 sprintf(name, "TermReader%d", i);
 
-                pid = fork1(name, TermReader, buf, USLOSS_MIN_STACK, 2);
+                pid = fork1(name, TermReader, termbuf, USLOSS_MIN_STACK, 2);
                 if (pid < 0)
                 {
                         console("Can't create term reader. Halting..\n");
@@ -791,10 +814,10 @@ int start3(char *arg)
                 Proc_Table[pid & MAXPROC].status = ACTIVE;
 
                 //TermWriter process
-                sprintf(buf, "%d", i);
+                sprintf(termbuf, "%d", i);
                 sprintf(name, "TermWriter%d", i);
 
-                pid = fork1(name, TermWriter, buf, USLOSS_MIN_STACK, 2);
+                pid = fork1(name, TermWriter, termbuf, USLOSS_MIN_STACK, 2);
                 if (pid < 0)
                 {
                         console("Can't create term writer. Halting..\n");
@@ -841,7 +864,7 @@ int start3(char *arg)
 
                 semv_real(disksems[i]);
 
-                zap(diskPID[i]);
+                zap(diskpids[i]);
 
         }
 
@@ -1098,10 +1121,17 @@ static int DiskDriver(char *arg)
                 else
                 {
                         //otherwise block and wait for another disk request
+                        if (DEBUG4 && debugflag4)
+                        {
+                          console("DiskDriver(%d): blocking and waiting..\n", unit);
+                        }
                         semp_real(disksems[unit]);
                 }
 
-                if (result < 0) console("DiskDriver(%d): read/write fail\n", unit);
+                if (result < 0)
+                {
+                  console("DiskDriver(%d): read/write fail\n", unit);
+                }
 
         }
 
