@@ -29,6 +29,9 @@ int debugflag4 = 1;
 
 static int running; /*semaphore to synchronize drivers and start3*/
 
+int terminate_clock;
+int terminate_disk;
+
 proc_struct Proc_Table[MAXPROC];
 int disksems[DISK_UNITS];
 int diskpids[DISK_UNITS];
@@ -124,7 +127,7 @@ int sleep_real(int seconds)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("sleep_real(): started. seconds: %d\n", seconds);
+                console("sleep_real(): started. seconds: %d\n", seconds);
         }
 
         if (seconds < 0) return -1;
@@ -174,7 +177,7 @@ void sleep(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("sleep(): started\n");
+                console("sleep(): started\n");
         }
 
         int seconds = (int) arg->arg1;
@@ -192,7 +195,7 @@ void add_driver_process(driver_proc_ptr some_proc)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("add_driver_process(%d): started\n", some_proc->unit);
+                console("add_driver_process(%d): started\n", some_proc->unit);
         }
 
         int unit = some_proc->unit;
@@ -201,8 +204,8 @@ void add_driver_process(driver_proc_ptr some_proc)
         {
                 if (DEBUG4 && debugflag4)
                 {
-                  console("add_driver_process(%d): inserting at head of diskQ (only member)\n",
-                  some_proc->unit);
+                        console("add_driver_process(%d): inserting at head of diskQ (only member)\n",
+                                some_proc->unit);
                 }
                 diskQ[unit] = some_proc;
         }
@@ -210,8 +213,8 @@ void add_driver_process(driver_proc_ptr some_proc)
         {
                 if (DEBUG4 && debugflag4)
                 {
-                  console("add_driver_process(%d): locating suitable slot inside diskQ\n",
-                  some_proc->unit);
+                        console("add_driver_process(%d): locating suitable slot inside diskQ\n",
+                                some_proc->unit);
                 }
                 driver_proc_ptr prev = diskQ[unit];
                 driver_proc_ptr walker = diskQ[unit]->next_ptr;
@@ -228,16 +231,16 @@ void add_driver_process(driver_proc_ptr some_proc)
                 }
                 else
                 {
-                  while (walker != NULL && prev->track_start <= walker->track_start)
-                  {
-                    prev = prev->next_ptr;
-                    walker = walker->next_ptr;
-                  }
-                  while (walker != NULL && walker->track_start <= some_proc->track_start)
-                  {
-                    prev = prev->next_ptr;
-                    walker = walker->next_ptr;
-                  }
+                        while (walker != NULL && prev->track_start <= walker->track_start)
+                        {
+                                prev = prev->next_ptr;
+                                walker = walker->next_ptr;
+                        }
+                        while (walker != NULL && walker->track_start <= some_proc->track_start)
+                        {
+                                prev = prev->next_ptr;
+                                walker = walker->next_ptr;
+                        }
                 }
         }
 }
@@ -248,7 +251,7 @@ int disksize_real(int unit, int * sector_size, int * sectors_in_track, int * tra
 {
         if (DEBUG4 && debugflag4)
         {
-          console("disksize_real(%d): started\n", unit);
+                console("disksize_real(%d): started\n", unit);
         }
 
         int status;
@@ -289,7 +292,7 @@ void disk_size(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("disk_size(): started\n");
+                console("disk_size(): started\n");
         }
 
         int result;
@@ -320,21 +323,31 @@ int diskwrite_real(int unit, int track_start, int sector_start, int sectors, voi
 {
         if (DEBUG4 && debugflag4)
         {
-          console("diskwrite_real(%d): started\n", unit);
+                console("diskwrite_real(%d): started. pid: %d, track_start: %d\n",
+                        unit, getpid(), track_start);
         }
 
         driver_proc new_proc;
 
         if (unit < 0 || unit > 1)
         {
+                if (DEBUG4 && debugflag4)
+                        console("diskwrite_real(%d): unit incorrect value: %d\n",
+                                unit, unit);
                 return -1;
         }
         if (track_start < 0 || track_start > num_tracks[unit] - 1)
         {
+                if (DEBUG4 && debugflag4)
+                        console("diskwrite_real(%d): track_start incorrect value: %d\n",
+                                unit, track_start);
                 return -1;
         }
         if (sector_start < 0 || sector_start > DISK_TRACK_SIZE - 1)
         {
+                if (DEBUG4 && debugflag4)
+                        console("diskwrite_real(%d): sector_start incorrect value: %d\n",
+                                unit, sector_start);
                 return -1;
         }
 
@@ -366,7 +379,7 @@ void disk_write(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("disk_write(): started\n");
+                console("disk_write(): started\n");
         }
 
         int result;
@@ -397,7 +410,7 @@ int diskread_real(int unit, int track_start, int sector_start, int sectors, void
 {
         if (DEBUG4 && debugflag4)
         {
-          console("diskread_real(%d): started\n", unit);
+                console("diskread_real(%d): started\n", unit);
         }
 
         driver_proc new_proc;
@@ -444,7 +457,7 @@ void disk_read(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("disk_read(): started\n");
+                console("disk_read(): started\n");
         }
 
         int result;
@@ -477,6 +490,8 @@ int start3(char *arg)
 
         int pid;
         int status;
+        terminate_clock = 1;
+        terminate_disk = 1;
 
         //Check kernel mode here.
         check_kernel_mode("start3");
@@ -560,23 +575,25 @@ int start3(char *arg)
          * I'm assuming kernel-mode versions of the system calls
          * with lower-case names.
          */
-        pid = spawn_real("start4", start4, NULL,  8 * USLOSS_MIN_STACK, 3);
+        pid = spawn_real("start4", start4, NULL,  USLOSS_MIN_STACK, 3);
+        console("0 - status: %d\n", status);
         pid = wait_real(&status);
 
         /*
          * Zap the device drivers
          */
+        console("1\n");
 
-
+        terminate_clock = 0;
         zap(clockPID); // clock driver
         join(&status);
 
+        terminate_disk = 0;
         for (i = 0; i < DISK_UNITS; i++)
         {
                 //unblock the device drivers
 
                 semv_real(disksems[i]);
-
                 zap(diskpids[i]);
                 join(&status);
 
@@ -590,7 +607,7 @@ static int ClockDriver(char *arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("ClockDriver(): started\n");
+                console("ClockDriver(): started\n");
         }
 
         int result;
@@ -603,7 +620,8 @@ static int ClockDriver(char *arg)
         enableInterrupts();
 
         //infinite loop till zappd
-        while(!is_zapped()) {
+        while(!is_zapped() && terminate_clock) {
+                if (terminate_clock == 0) break;
                 result = waitdevice(CLOCK_DEV, 0, &status);
                 if (result != 0) {
                         return 0;
@@ -612,12 +630,13 @@ static int ClockDriver(char *arg)
                  * Compute the current time and wake up any processes
                  * whose time has come.
                  */
-                 while (sleepQ != NULL && sleepQ->wake_time <= sys_clock())
-                 {
-                   int mbox_id = sleepQ->mbox_id;
-                   sleepQ = sleepQ->sleep_ptr;
-                   MboxSend(mbox_id, NULL, 0);
-                 }
+                while (sleepQ != NULL && sleepQ->wake_time < sys_clock())
+                {
+                        //get rid of other sleeping processes
+                        int mbox_id = sleepQ->mbox_id;
+                        sleepQ = sleepQ->sleep_ptr;
+                        MboxSend(mbox_id, NULL, 0);
+                }
         }
 
         return 0;
@@ -628,7 +647,7 @@ int dev_output(device_request * req, int unit)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("dev_output(%d): started\n", unit);
+                console("dev_output(%d): started\n", unit);
         }
 
         int status;
@@ -652,79 +671,80 @@ int dev_output(device_request * req, int unit)
 
 int diskwrite_handler(int unit)
 {
-  if (DEBUG4 && debugflag4)
-  {
-    console("diskwrite_handler(%d): started\n", unit);
-  }
+        if (DEBUG4 && debugflag4)
+        {
+                console("diskwrite_handler(%d): started\n", unit);
+        }
 
-  int status = 0;
-  int current_track = diskQ[unit]->track_start;
-  int current_sector = diskQ[unit]->sector_start;
+        int status = 0;
+        int current_track = diskQ[unit]->track_start;
+        int current_sector = diskQ[unit]->sector_start;
 
-  device_request req;
-  req.opr = DISK_SEEK;
-  req.reg1 = (void *) current_track;
+        device_request req;
+        req.opr = DISK_SEEK;
+        req.reg1 = (void *) current_track;
 
-  //seek to initial track & write
-  if (dev_output(&req, unit) < 0)
-  {
-    return -1;
-  }
+        //seek to initial track & write
+        if (dev_output(&req, unit) < 0)
+        {
+                return -1;
+        }
 
-  for (int i = 0; i < diskQ[unit]->num_sectors; i++)
-  {
-    //if all sectors are used
-    if (current_sector == DISK_TRACK_SIZE)
-    {
-      current_sector = 0;
-      current_track++;
+        for (int i = 0; i < diskQ[unit]->num_sectors; i++)
+        {
+                //if all sectors are used
+                if (current_sector == DISK_TRACK_SIZE)
+                {
+                        current_sector = 0;
+                        current_track++;
 
-      //if all tracks on disk are used
-      if (current_track == num_tracks[unit])
-      {
-        return -1;
-      }
+                        //if all tracks on disk are used
+                        if (current_track == num_tracks[unit])
+                        {
+                                return -1;
+                        }
 
-      req.opr = DISK_SEEK;
-      req.reg1 = (void *) current_track;
+                        req.opr = DISK_SEEK;
+                        req.reg1 = (void *) current_track;
 
-      //seek to next track
-      if (dev_output(&req, unit) < 0)
-      {
-        console("diskwrite_handler: failed to write\n");
-        return -1;
-      }
-    }
+                        //seek to next track
+                        if (dev_output(&req, unit) < 0)
+                        {
 
-    req.opr = DISK_WRITE;
-    req.reg1 = (void *) current_sector;
-    req.reg2 = diskQ[unit]->disk_buf + (512 * i);
+                                console("diskwrite_handler: failed to write\n");
+                                return -1;
+                        }
+                }
 
-    //write sector to disk
-    if (dev_output(&req, unit) < 0)
-    {
-      diskQ[unit] = diskQ[unit]->next_ptr;
-      diskQ[unit]->status = status;
-      console("diskwrite_handler: failed to write\n");
-      return -1;
-    }
+                req.opr = DISK_WRITE;
+                req.reg1 = (void *) current_sector;
+                req.reg2 = diskQ[unit]->disk_buf + (512 * i);
 
-    current_sector++;
-  }
+                //write sector to disk
+                if (dev_output(&req, unit) < 0)
+                {
+                        diskQ[unit] = diskQ[unit]->next_ptr;
+                        diskQ[unit]->status = status;
+                        console("diskwrite_handler: failed to write\n");
+                        return -1;
+                }
 
-  //remove req and wake up calling process
-  int mbox_id = diskQ[unit]->mbox_id;
-  diskQ[unit] = diskQ[unit]->next_ptr;
-  MboxSend(mbox_id, NULL, 0);
+                current_sector++;
+        }
 
-  return 0;
+        //remove req and wake up calling process
+        int mbox_id = diskQ[unit]->mbox_id;
+        diskQ[unit] = diskQ[unit]->next_ptr;
+        MboxSend(mbox_id, NULL, 0);
+
+        return 0;
 }
 
 int diskread_handler(int unit)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("diskread_handler(%d): started\n", unit);
+                console("diskread_handler(%d): started\n", unit);
         }
 
         char buf[512];
@@ -788,14 +808,16 @@ static int DiskDriver(char *arg)
 {
         if (DEBUG4 && debugflag4)
         {
-          console("DiskDriver(): started\n");
+                console("DiskDriver(): started\n");
         }
 
         int unit = atoi(arg);
-        int result;
+        int result = 0;
 
-        while (!is_zapped())
+        while (!is_zapped() && terminate_disk)
         {
+                if (terminate_disk == 0) break;
+
                 if (diskQ[unit] != NULL)
                 {
                         switch(diskQ[unit]->operation)
@@ -815,14 +837,14 @@ static int DiskDriver(char *arg)
                         //otherwise block and wait for another disk request
                         if (DEBUG4 && debugflag4)
                         {
-                          console("DiskDriver(%d): blocking and waiting..\n", unit);
+                                console("DiskDriver(%d): blocking and waiting..\n", unit);
                         }
                         semp_real(disksems[unit]);
                 }
 
                 if (result < 0)
                 {
-                  console("DiskDriver(%d): read/write fail\n", unit);
+                        console("DiskDriver(%d): read/write fail\n", unit);
                 }
 
         }
