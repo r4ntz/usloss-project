@@ -98,6 +98,13 @@ void enableInterrupts()
         psr_set(psr_get() & ~PSR_CURRENT_INT);
 }
 
+/* ------------------------------------------------------------------------
+   Name - add_process
+   Purpose - helper function for Proc_Table
+   Parameters - n/a
+   Returns - n/a
+   Side Effects - adds current process to table
+   ----------------------------------------------------------------------- */
 void add_process()
 {
         if (getpid() != Proc_Table[getpid() % MAXPROC].pid)
@@ -112,6 +119,13 @@ void add_process()
 
 }
 
+/* ------------------------------------------------------------------------
+   Name - remove_process
+   Purpose - helper function for Proc_Table
+   Parameters - n/a
+   Returns - n/a
+   Side Effects - removes running process from our proc_table
+   ----------------------------------------------------------------------- */
 void remove_process()
 {
         MboxRelease(Proc_Table[getpid() % MAXPROC].mbox_id);
@@ -123,6 +137,13 @@ void remove_process()
         return;
 }
 
+/* ------------------------------------------------------------------------
+   Name - sleep_real
+   Purpose - blocks process for "seconds" amount of time
+   Parameters - seconds
+   Returns - zero upon success otherwise -1
+   Side Effects - n/a
+   ----------------------------------------------------------------------- */
 int sleep_real(int seconds)
 {
         if (DEBUG4 && debugflag4)
@@ -173,6 +194,13 @@ int sleep_real(int seconds)
         return 0;
 }
 
+/* ------------------------------------------------------------------------
+   Name - sleep
+   Purpose - parse args and call sleep_real
+   Parameters - sysargs
+   Returns - n/a
+   Side Effects - n/a
+   ----------------------------------------------------------------------- */
 void sleep(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
@@ -191,6 +219,13 @@ void sleep(sysargs * arg)
         }
 }
 
+/* ------------------------------------------------------------------------
+   Name - add_driver_process
+   Purpose - helper function which adds to our disk queue
+   Parameters - driver_proc_ptr
+   Returns - n/a
+   Side Effects - function may result in different diskQ head
+   ----------------------------------------------------------------------- */
 void add_driver_process(driver_proc_ptr some_proc)
 {
         if (DEBUG4 && debugflag4)
@@ -246,7 +281,13 @@ void add_driver_process(driver_proc_ptr some_proc)
 }
 
 
-
+/* ------------------------------------------------------------------------
+   Name - disksize_real
+   Purpose - requests disk size by calling device_output
+   Parameters - unit, sector_size, sectors_in_track, tracks_in_disk
+   Returns - zero upon success otherwise -1
+   Side Effects - n/a
+   ----------------------------------------------------------------------- */
 int disksize_real(int unit, int * sector_size, int * sectors_in_track, int * tracks_in_disk)
 {
         if (DEBUG4 && debugflag4)
@@ -288,6 +329,13 @@ int disksize_real(int unit, int * sector_size, int * sectors_in_track, int * tra
         return 0;
 }
 
+/* ------------------------------------------------------------------------
+   Name - disk_size
+   Purpose - takes arguments and calls disksize_real
+   Parameters - sysargs pointer
+   Returns - n/a
+   Side Effects - if disksize_real returns -1 then arg4 -1 otherwise 0
+   ----------------------------------------------------------------------- */
 void disk_size(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
@@ -319,6 +367,13 @@ void disk_size(sysargs * arg)
         arg->arg3 = (void *) tracks_in_disk;
 }
 
+/* ------------------------------------------------------------------------
+   Name - diskwrite_real
+   Purpose - adds diskread request to queue and blocks till completed
+   Parameters - unit, track_start, sector_start, sectors, buffer
+   Returns - status otherwise -1
+   Side Effects - none
+   ----------------------------------------------------------------------- */
 int diskwrite_real(int unit, int track_start, int sector_start, int sectors, void * buffer)
 {
         if (DEBUG4 && debugflag4)
@@ -375,6 +430,13 @@ int diskwrite_real(int unit, int track_start, int sector_start, int sectors, voi
 
 }
 
+/* ------------------------------------------------------------------------
+   Name - disk_write
+   Purpose - takes arguments and calls disksize_real
+   Parameters - sysargs
+   Returns - n/a
+   Side Effects - if diskwrite_real returns -1 then arg1 -1 otherwise 0
+   ----------------------------------------------------------------------- */
 void disk_write(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
@@ -406,6 +468,13 @@ void disk_write(sysargs * arg)
         return;
 }
 
+/* ------------------------------------------------------------------------
+   Name - diskread_real
+   Purpose - adds diskread req to queue and blocks till req is completed
+   Parameters - unit, track_start, sector_start, sectors, buffer
+   Returns - -1 if bad parameters otherwise return status
+   Side Effects - n/a
+   ----------------------------------------------------------------------- */
 int diskread_real(int unit, int track_start, int sector_start, int sectors, void * buffer)
 {
         if (DEBUG4 && debugflag4)
@@ -453,6 +522,13 @@ int diskread_real(int unit, int track_start, int sector_start, int sectors, void
 
 }
 
+/* ------------------------------------------------------------------------
+   Name - disk_read
+   Purpose - parses args and calls diskread_real
+   Parameters - sysargs
+   Returns - n/a
+   Side Effects - if diskread_real returns -1 then arg4 -1 otherwise 0
+   ----------------------------------------------------------------------- */
 void disk_read(sysargs * arg)
 {
         if (DEBUG4 && debugflag4)
@@ -522,7 +598,6 @@ int start3(char *arg)
          * I am assuming a semaphore here for coordination.  A mailbox can
          * be used instead -- your choice.
          */
-        running = semcreate_real(0);
         clockPID = fork1("Clock driver", ClockDriver, NULL, USLOSS_MIN_STACK, 2);
         if (clockPID < 0) {
                 console("start3(): Can't create clock driver\n");
@@ -538,8 +613,6 @@ int start3(char *arg)
          * Wait for the clock driver to start. The idea is that ClockDriver
          * will V the semaphore "running" once it is running.
          */
-
-        semp_real(running);
 
         /*
          * Create the disk device drivers here.  You may need to increase
@@ -616,11 +689,12 @@ static int ClockDriver(char *arg)
         /*
          * Let the parent know we are running and enable interrupts.
          */
-        semv_real(running);
+        //semv_real(running);
         enableInterrupts();
 
         //infinite loop till zappd
-        while(!is_zapped() && terminate_clock) {
+        while(terminate_clock) {
+                console("Test\n");
                 if (terminate_clock == 0) break;
                 result = waitdevice(CLOCK_DEV, 0, &status);
                 if (result != 0) {
@@ -642,7 +716,13 @@ static int ClockDriver(char *arg)
         return 0;
 }
 
-//helper function for device_output
+/* ------------------------------------------------------------------------
+   Name - dev_output
+   Purpose - helper function for device_output
+   Parameters - device_request ptr, unit
+   Returns - zero upon success otherwise -1
+   Side Effects - n/a
+   ----------------------------------------------------------------------- */
 int dev_output(device_request * req, int unit)
 {
         if (DEBUG4 && debugflag4)
@@ -740,6 +820,13 @@ int diskwrite_handler(int unit)
         return 0;
 }
 
+/* ------------------------------------------------------------------------
+   Name - diskread_handler
+   Purpose - reads data and writes to buffer
+   Parameters - unit
+   Returns - zero upon success otherwise -1
+   Side Effects -
+   ----------------------------------------------------------------------- */
 int diskread_handler(int unit)
 {
         if (DEBUG4 && debugflag4)
