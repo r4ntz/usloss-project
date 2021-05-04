@@ -25,7 +25,7 @@
 #include "driver.h"
 
 /* -------------------------- Globals ------------------------------------- */
-int debugflag4 = 1;
+int debugflag4 = 0;
 
 static int running; /*semaphore to synchronize drivers and start3*/
 
@@ -649,13 +649,11 @@ int start3(char *arg)
          * with lower-case names.
          */
         pid = spawn_real("start4", start4, NULL,  USLOSS_MIN_STACK, 3);
-        console("0 - status: %d\n", status);
         pid = wait_real(&status);
 
         /*
          * Zap the device drivers
          */
-        console("1\n");
 
         terminate_clock = 0;
         zap(clockPID); // clock driver
@@ -694,7 +692,6 @@ static int ClockDriver(char *arg)
 
         //infinite loop till zappd
         while(terminate_clock) {
-                console("Test\n");
                 if (terminate_clock == 0) break;
                 result = waitdevice(CLOCK_DEV, 0, &status);
                 if (result != 0) {
